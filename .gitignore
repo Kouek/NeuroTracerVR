@@ -1,0 +1,10 @@
+# CMake
+out/
+CMakeSettings.json
+include/cmake_in.h
+
+# VS
+.vs/
+
+# Output
+/bin/

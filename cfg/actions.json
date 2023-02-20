@@ -1,0 +1,85 @@
+{
+  "default_bindings": [
+    {
+      "controller_type": "vive_controller",
+      "binding_url": "vive_controller_binding.json"
+    }
+  ],
+  "action_sets": [
+    {
+      "name": "/actions/wander",
+      "usage": "Interection in Wander Mode"
+    }
+  ],
+  "actions": [
+    {
+      "name": "/actions/wander/in/left_axis1_pull",
+      "type": "vector1"
+    },
+    {
+      "name": "/actions/wander/in/left_axis1_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/right_axis1_pull",
+      "type": "vector1"
+    },
+    {
+      "name": "/actions/wander/in/right_axis1_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/left_south_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/left_north_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/left_east_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/left_west_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/right_south_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/right_north_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/right_east_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/right_west_click",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/left_applicationmenu_press",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/right_applicationmenu_press",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/wander/in/left_pose",
+      "type": "pose"
+    },
+    {
+      "name": "/actions/wander/in/right_pose",
+      "type": "pose"
+    }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_US"
+    }
+  ]
+}
