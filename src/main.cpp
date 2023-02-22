@@ -1,15 +1,21 @@
 #include <cmake_in.h>
 
-#include "renderer/comp/comp_vol_vr_renderer.h"
-#include "shader/gl_helper.hpp"
+#include <limits>
 
 #include "glfw_app.h"
 #include "vr_app.h"
 
+#include "renderer/comp/comp_vol_vr_renderer.h"
+#include "shader/gl_helper.hpp"
+
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <spdlog/spdlog.h>
 
-#include <util/math.hpp>
-#include <util/shader.hpp>
+#include <cg/color_tbl.hpp>
+#include <cg/math.hpp>
+#include <cg/shader.hpp>
+#include <path/gl_path_renderer.hpp>
 #include <util/vol_cfg.hpp>
 
 using namespace kouek;
@@ -22,9 +28,15 @@ static std::unique_ptr<VRApp> vrApp;
 
 static glm::vec3 spaces;
 static float rayStep;
+static glm::mat4 W2V;
+static glm::mat4 V2W;
 static uint32_t blockLength, noPaddingBlockLength;
 static VRRenderer::CameraParam camParam;
+
 static std::unique_ptr<VRRenderer> renderer;
+static std::unique_ptr<GLPathRenderer> pathRenderer;
+
+static ColorTable colTbl;
 
 // 2 pair of FBOs for multisampling
 static std::array<GLuint, 2> renderTex2;
@@ -43,8 +55,8 @@ static std::array<GLuint, 2> rndrDepFBO2;
 static std::array<GLuint, 2> fromRendererEyeTex2;
 
 static GLuint quadVAO, quadVBO, quadEBO;
-static std::unique_ptr<Shader> quadShader, diffuseShader, rndrDepShader;
-static GLint dfShdrMatPos, rndrDepShdrMatPos;
+static std::unique_ptr<Shader> quadShader, diffuseShader, diffuseDepShader;
+static GLint dfShdrMatPos, diffuseDepShdrMatPos;
 
 static void initRender() {
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
@@ -77,13 +89,12 @@ static void initRender() {
     dfShdrMatPos = glGetUniformLocation(diffuseShader->ID, "matrix");
     assert(dfShdrMatPos != -1);
 
-    rndrDepShader = std::make_unique<Shader>(
-        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/render_depth.vs")
-            .c_str(),
-        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/render_depth.fs")
+    diffuseDepShader = std::make_unique<Shader>(
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/diffuse.vs").c_str(),
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/diffuse_dep.fs")
             .c_str());
-    rndrDepShdrMatPos = glGetUniformLocation(rndrDepShader->ID, "matrix");
-    assert(rndrDepShdrMatPos != -1);
+    diffuseDepShdrMatPos = glGetUniformLocation(diffuseDepShader->ID, "matrix");
+    assert(diffuseDepShdrMatPos != -1);
 
     glfwApp->SetSubmitTex2(submitEyeFBO2, sharedStates->renderSz);
 
@@ -129,16 +140,18 @@ static void initRender() {
                          ex.what(), __LINE__, __FILE__);
         sharedStates->canRun = false;
     }
+
+    pathRenderer = std::make_unique<GLPathRenderer>(
+        std::string(PROJECT_SOURCE_DIR) + "/include/path");
 }
 
 static void initSignalAndSlots() {
-    statefulSys->Register(std::tie(sharedStates->preScale), [&]() {
+    statefulSys->Register(std::tie(sharedStates->scaleW2V), [&]() {
         spdlog::info("App info: max step count is set to {0}",
-                     sharedStates->preScale);
+                     sharedStates->scaleW2V);
     });
     statefulSys->Register(
-        std::tie(sharedStates->FAVRLvl, sharedStates->maxStepCnt),
-        [&]() {
+        std::tie(sharedStates->FAVRLvl, sharedStates->maxStepCnt), [&]() {
             VRRenderer::RenderParam param;
             param.FAVRLvl = sharedStates->FAVRLvl;
             param.renderSz = sharedStates->renderSz;
@@ -150,7 +163,7 @@ static void initSignalAndSlots() {
                          sharedStates->maxStepCnt, sharedStates->FAVRLvl);
         });
     statefulSys->Register(
-        std::tie(sharedStates->projection2, sharedStates->preScale), [&]() {
+        std::tie(sharedStates->projection2, sharedStates->scaleW2V), [&]() {
             VRRenderer::ProjectionParam param;
             param.unProjection2[0] =
                 Math::InverseProjective(sharedStates->projection2[0]);
@@ -161,29 +174,39 @@ static void initSignalAndSlots() {
                     -(sharedStates->FAR_CLIP + sharedStates->NEAR_CLIP) /
                     (sharedStates->FAR_CLIP - sharedStates->NEAR_CLIP);
                 param.projection23[eyeIdx] =
-                    -2.f * sharedStates->preScale * sharedStates->preScale *
+                    -2.f * sharedStates->scaleW2V * sharedStates->scaleW2V *
                     sharedStates->FAR_CLIP * sharedStates->NEAR_CLIP /
                     (sharedStates->FAR_CLIP - sharedStates->NEAR_CLIP);
             }
             renderer->SetProjectionParam(param);
         });
     statefulSys->Register(
-        std::tie(sharedStates->preScale, sharedStates->preTranslate,
+        std::tie(sharedStates->scaleW2V, sharedStates->translateW2V), [&]() {
+            W2V = glm::scale(glm::translate(glm::identity<glm::mat4>(),
+                                            sharedStates->translateW2V),
+                             glm::vec3{sharedStates->scaleW2V});
+            V2W = glm::translate(
+                glm::scale(glm::identity<glm::mat4>(),
+                           glm::vec3{1.f / sharedStates->scaleW2V}),
+                -sharedStates->translateW2V);
+        });
+    statefulSys->Register(
+        std::tie(sharedStates->scaleW2V, sharedStates->translateW2V,
                  sharedStates->camera),
         [&]() {
             auto [R, F, U, PL, PR] = sharedStates->camera.GetRFUP2();
             camParam.pos2[0] =
-                (sharedStates->preScale * PL) + sharedStates->preTranslate;
+                (sharedStates->scaleW2V * PL) + sharedStates->translateW2V;
             camParam.pos2[1] =
-                (sharedStates->preScale * PR) + sharedStates->preTranslate;
+                (sharedStates->scaleW2V * PR) + sharedStates->translateW2V;
             camParam.rotation = {R, U, -F};
         },
         std::tie(camParam));
     statefulSys->Register(
-        std::tie(sharedStates->preScale),
+        std::tie(sharedStates->scaleW2V),
         [&]() {
             camParam.OBBBorderDistToEyeCntr =
-                sharedStates->preScale * SharedStates::NEAR_CLIP;
+                sharedStates->scaleW2V * SharedStates::NEAR_CLIP;
             camParam.OBBHfSz.x = .25f * noPaddingBlockLength * spaces.x;
             camParam.OBBHfSz.y = .25f * noPaddingBlockLength * spaces.y;
             camParam.OBBHfSz.z = .125f * noPaddingBlockLength * spaces.z;
@@ -191,6 +214,37 @@ static void initSignalAndSlots() {
         std::tie(camParam));
     statefulSys->Register(std::tie(camParam),
                           [&]() { renderer->SetCameraParam(camParam); });
+    statefulSys->Register(
+        std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].clicked),
+        [&]() {
+            switch (sharedStates->interactiveMode) {
+            case InteractionMode::SelectVert:
+                break;
+            case InteractionMode::AddPath: {
+                auto &col = colTbl.NextColor();
+                auto pos =
+                    W2V * sharedStates->handStates2[VRApp::PathInteractHndIdx]
+                              .pose[3];
+                auto id = pathRenderer->AddPath(col, pos);
+
+                pathRenderer->StartPath(id);
+                sharedStates->interactiveMode = InteractionMode::AddVert;
+            } break;
+            case InteractionMode::AddVert: {
+                if (pathRenderer->GetSelectedSubPathID() ==
+                    GLPathRenderer::NONE) {
+                    auto id = pathRenderer->AddSubPath();
+                    pathRenderer->StartSubPath(id);
+                }
+
+                auto pos =
+                    W2V * sharedStates->handStates2[VRApp::PathInteractHndIdx]
+                              .pose[3];
+                auto id = pathRenderer->AddVertex(pos);
+                pathRenderer->StartVertex(id);
+            } break;
+            }
+        });
 }
 
 static void processAppInput() {
@@ -206,6 +260,9 @@ static void outputToApp() {
 }
 
 static void render() {
+    pathRenderer->PrepareExtraVertex(
+        sharedStates->handStates2[VRApp::PathInteractHndIdx].pose[3]);
+
     std::array<glm::mat4, 2> VP2;
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
         VP2[eyeIdx] = sharedStates->projection2[eyeIdx] *
@@ -227,30 +284,43 @@ static void render() {
 
     glEnable(GL_MULTISAMPLE);
     glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
 
     glClearColor(1.f, 1.f, 1.f, 1.f); // area without fragments set to FarClip
-    rndrDepShader->use();
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_FRAMEBUFFER, rndrDepFBO2[eyeIdx]);
         glViewport(0, 0, sharedStates->renderSz.x, sharedStates->renderSz.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        renderHands(eyeIdx, rndrDepShdrMatPos);
+        pathRenderer->DrawExtraVertexDepth(GLPathRenderer::selectedVertSize,
+                                           VP2[eyeIdx]);
+        pathRenderer->DrawDepth(V2W, VP2[eyeIdx]);
+
+        diffuseDepShader->use();
+        renderHands(eyeIdx, diffuseDepShdrMatPos);
     }
 
     renderer->Render(sharedStates->renderTarget);
 
     glClearColor(0, 0, 0, 1.f); // background
-    diffuseShader->use();
+
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_FRAMEBUFFER, renderFBO2[eyeIdx]);
         glViewport(0, 0, sharedStates->renderSz.x, sharedStates->renderSz.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        pathRenderer->DrawExtraVertex(GLPathRenderer::selectedVertSize,
+                                      VP2[eyeIdx],
+                                      GLPathRenderer::selectedVertColor);
+        pathRenderer->Draw(V2W, VP2[eyeIdx]);
+
+        diffuseShader->use();
         renderHands(eyeIdx, dfShdrMatPos);
     }
 
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -258,9 +328,11 @@ static void render() {
     glBindVertexArray(quadVAO);
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_FRAMEBUFFER, renderFBO2[eyeIdx]);
+        glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fromRendererEyeTex2[eyeIdx]);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr);
     }
+    glBindVertexArray(0);
 
     glDisable(GL_MULTISAMPLE);
     glDisable(GL_BLEND);
@@ -278,11 +350,11 @@ static void render() {
 int main(int argc, char **argv) {
     statefulSys = std::make_shared<StatefulSystem>();
     sharedStates = std::make_shared<SharedStates>(*statefulSys.get());
-    
+
     glfwApp = std::make_unique<GLFWApp>(sharedStates, statefulSys);
     if (!sharedStates->canRun) {
         spdlog::critical("App error: GLFW or GL init failed. caused before "
-                         "line: {1} in file: {2}."
+                         "line: {0} in file: {1}."
                          "App is closing.",
                          __LINE__, __FILE__);
         return 1;

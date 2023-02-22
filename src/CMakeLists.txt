@@ -41,9 +41,7 @@ target_compile_options(
 	${TARGET_NAME}
 	PRIVATE
 	$<$<COMPILE_LANGUAGE:CUDA>:
-		--generate-line-info
 		--use_fast_math
-		--relocatable-device-code=true
     >
 )
 target_link_libraries(

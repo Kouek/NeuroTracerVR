@@ -10,10 +10,12 @@
 
 namespace kouek {
 class VRApp {
+  public:
+    static constexpr uint8_t PathInteractHndIdx = 1;
+
   private:
     enum class DigitActIdx : uint8_t {
         TriggerClick = 0,
-        TriggerPull,
         TrackpadSClick,
         TrackpadNClick,
         TrackpadWClick,
@@ -21,17 +23,32 @@ class VRApp {
         Menu,
         End
     };
+    enum class AnalogActIdx : uint8_t { TriggerPull = 0, End };
 
-    std::array<std::array<bool, static_cast<uint8_t>(DigitActIdx::End)>, 2>
+  private:
+    template <typename ActIdxTy>
+    static inline constexpr uint8_t actIdxToIdx(ActIdxTy idx) {
+        return static_cast<uint8_t>(idx);
+    };
+
+  private:
+    std::array<std::array<bool, actIdxToIdx(DigitActIdx::End)>, 2>
         digitActionActives2;
-    std::array<std::array<bool, static_cast<uint8_t>(DigitActIdx::End)>, 2>
+    std::array<std::array<bool, actIdxToIdx(DigitActIdx::End)>, 2>
         digitActionStates2;
-    std::array<std::array<bool, static_cast<uint8_t>(DigitActIdx::End)>, 2>
+    std::array<std::array<bool, actIdxToIdx(DigitActIdx::End)>, 2>
         digitActionChangeds2;
-    std::array<std::array<vr::VRActionHandle_t,
-                          static_cast<uint8_t>(DigitActIdx::End)>,
+    std::array<std::array<vr::VRActionHandle_t, actIdxToIdx(DigitActIdx::End)>,
                2>
         digitActions2;
+
+    std::array<std::array<bool, actIdxToIdx(DigitActIdx::End)>, 2>
+        analogActionActives2;
+    std::array<std::array<glm::vec3, actIdxToIdx(AnalogActIdx::End)>, 2>
+        analogActionDeltas2;
+    std::array<std::array<vr::VRActionHandle_t, actIdxToIdx(AnalogActIdx::End)>,
+               2>
+        analogActions2;
 
     std::array<vr::Texture_t, 2> submitTex2{0};
     vr::IVRSystem *HMD;
@@ -62,11 +79,7 @@ class VRApp {
     void ProcessOutput();
 
   private:
-    void initSignalSlots();
-    static inline std::function<uint8_t(DigitActIdx)> digitActIdxToUint8 =
-        [](DigitActIdx idx) constexpr {
-        return static_cast<uint8_t>(idx);
-    };
+    void initSignalAndSlots();
 };
 } // namespace kouek
 

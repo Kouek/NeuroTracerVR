@@ -55,7 +55,7 @@ kouek::GLFWApp::GLFWApp(std::shared_ptr<SharedStates> sharedStates,
         return;
     }
 
-    initSignalSlots();
+    initSignalAndSlots();
 }
 
 kouek::GLFWApp::~GLFWApp() { glfwTerminate(); }
@@ -87,7 +87,9 @@ void kouek::GLFWApp::ProcessOutput() {
     glfwSwapBuffers(window);
 }
 
-void kouek::GLFWApp::initSignalSlots() {
+void kouek::GLFWApp::initSignalAndSlots() {
+    // This function map GLFW inputs to sharedStates
+
     statefulSys->Register(
         [&]() {
             sharedStates->renderTarget =

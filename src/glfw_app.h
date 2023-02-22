@@ -33,7 +33,7 @@ class GLFWApp {
     void ProcessOutput();
 
     private:
-    void initSignalSlots();
+    void initSignalAndSlots();
 };
 } // namespace kouek
 
