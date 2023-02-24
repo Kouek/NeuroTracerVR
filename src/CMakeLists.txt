@@ -42,6 +42,7 @@ target_compile_options(
 	PRIVATE
 	$<$<COMPILE_LANGUAGE:CUDA>:
 		--use_fast_math
+		--extended-lambda
     >
 )
 target_link_libraries(

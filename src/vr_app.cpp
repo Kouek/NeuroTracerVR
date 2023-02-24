@@ -221,6 +221,7 @@ void kouek::VRApp::initSignalAndSlots() {
         std::tie(sharedStates->camera, sharedStates->projection2));
 
     static constexpr auto MOVE_SENSITY = .01f;
+
     // trackpad -> preTranslate
     statefulSys->Register(
         [&]() {
@@ -287,6 +288,7 @@ void kouek::VRApp::initSignalAndSlots() {
                    digitActionStates2[1]
                                      [actIdxToIdx(DigitActIdx::TrackpadWClick)];
         });
+
     // trigger -> some actions
     statefulSys->Register(
         [&]() { sharedStates->handStates2[PathInteractHndIdx].clicked = true; },

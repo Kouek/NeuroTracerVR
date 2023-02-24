@@ -92,22 +92,26 @@ void kouek::GLFWApp::initSignalAndSlots() {
 
     statefulSys->Register(
         [&]() {
-            sharedStates->renderTarget =
-                glbKey == GLFW_KEY_END
-                    ? static_cast<VRRenderer::RenderTarget>(
-                          static_cast<uint8_t>(sharedStates->renderTarget) + 1)
-                    : static_cast<VRRenderer::RenderTarget>(
-                          static_cast<uint8_t>(sharedStates->renderTarget) - 1);
+            switch (glbKey) {
+            case GLFW_KEY_END:
+                if (glbAction == GLFW_RELEASE &&
+                    static_cast<uint8_t>(sharedStates->renderTarget) != 0)
+                    sharedStates->renderTarget =
+                        static_cast<VRRenderer::RenderTarget>(
+                            static_cast<uint8_t>(sharedStates->renderTarget) -
+                            1);
+                break;
+            case GLFW_KEY_UP:
+                if (glbAction == GLFW_RELEASE &&
+                    static_cast<uint8_t>(sharedStates->renderTarget) !=
+                        static_cast<uint8_t>(VRRenderer::RenderTarget::End) - 1)
+                    sharedStates->renderTarget =
+                        static_cast<VRRenderer::RenderTarget>(
+                            static_cast<uint8_t>(sharedStates->renderTarget) +
+                            1);
+                break;
+            }
             glbAction = glbKey = -1;
         },
-        std::tie(sharedStates->renderTarget),
-        [&]() {
-            return glbAction == GLFW_RELEASE &&
-                   ((glbKey == GLFW_KEY_END &&
-                     static_cast<uint8_t>(sharedStates->renderTarget) !=
-                         static_cast<uint8_t>(VRRenderer::RenderTarget::End) -
-                             1) ||
-                    (glbKey == GLFW_KEY_HOME &&
-                     static_cast<uint8_t>(sharedStates->renderTarget) != 0));
-        });
+        std::tie(sharedStates->renderTarget));
 }

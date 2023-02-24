@@ -5,6 +5,7 @@
 #include "glfw_app.h"
 #include "vr_app.h"
 
+#include "renderer/comp/comp_vol_algorithm.h"
 #include "renderer/comp/comp_vol_vr_renderer.h"
 #include "shader/gl_helper.hpp"
 
@@ -27,7 +28,7 @@ static std::unique_ptr<GLFWApp> glfwApp;
 static std::unique_ptr<VRApp> vrApp;
 
 static glm::vec3 spaces;
-static float rayStep;
+static float baseRayStep;
 static glm::mat4 W2V;
 static glm::mat4 V2W;
 static uint32_t blockLength, noPaddingBlockLength;
@@ -38,7 +39,10 @@ static std::unique_ptr<GLPathRenderer> pathRenderer;
 
 static ColorTable colTbl;
 
-// 2 pair of FBOs for multisampling
+static std::tuple<bool, glm::vec3> interactingPos;
+static glm::vec3 interactingCubeCntrPos;
+
+// 2 pairs of FBOs for multisampling
 static std::array<GLuint, 2> renderTex2;
 static std::array<GLuint, 2> renderDep2;
 static std::array<GLuint, 2> renderFBO2;
@@ -46,7 +50,7 @@ static std::array<GLuint, 2> submitEyeTex2;
 static std::array<GLuint, 2> submitEyeDep2;
 static std::array<GLuint, 2> submitEyeFBO2;
 
-// framebuffer's depth buffer format is not supported in CUDA,
+// Framebuffer's depth buffer format is not supported in CUDA,
 // an RGAB8 format one is needed
 static std::array<GLuint, 2> rndrDepTex2;
 static std::array<GLuint, 2> rndrDepDep2;
@@ -54,9 +58,14 @@ static std::array<GLuint, 2> rndrDepFBO2;
 
 static std::array<GLuint, 2> fromRendererEyeTex2;
 
+// Objects except for volume and hand model
+static GLuint cubeVAO, cubeVBO, cubeEBO;
+static std::unique_ptr<Shader> cubeShader, cubeDepShader;
+static GLint cubeShdrMatPos, cubeDepShdrMatPos;
+
 static GLuint quadVAO, quadVBO, quadEBO;
 static std::unique_ptr<Shader> quadShader, diffuseShader, diffuseDepShader;
-static GLint dfShdrMatPos, diffuseDepShdrMatPos;
+static GLint dfShdrMatPos, dfDepShdrMatPos;
 
 static void initRender() {
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
@@ -77,6 +86,27 @@ static void initRender() {
     if (sharedStates->canVRRun)
         vrApp->SetSubmitTex2(submitEyeTex2);
 
+    std::tie(cubeVAO, cubeVBO, cubeEBO) =
+        createCube(SharedStates::INTERACT_CUBE_HF_WID);
+
+    cubeShader = std::make_unique<Shader>(
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/color.vs").c_str(),
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/color.fs").c_str());
+    cubeShdrMatPos = glGetUniformLocation(cubeShader->ID, "matrix");
+    assert(cubeShdrMatPos != -1);
+    {
+        auto cubeShdrColPos = glGetUniformLocation(cubeShader->ID, "color");
+        assert(cubeShdrColPos != -1);
+        cubeShader->use();
+        glUniform3fv(cubeShdrColPos, 1, &SharedStates::INTERACT_CUBE_COL[0]);
+    }
+
+    cubeDepShader = std::make_unique<Shader>(
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/color.vs").c_str(),
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/dep.fs").c_str());
+    cubeDepShdrMatPos = glGetUniformLocation(cubeDepShader->ID, "matrix");
+    assert(cubeDepShdrMatPos != -1);
+
     std::tie(quadVAO, quadVBO, quadEBO) = createQuad();
 
     quadShader = std::make_unique<Shader>(
@@ -91,10 +121,9 @@ static void initRender() {
 
     diffuseDepShader = std::make_unique<Shader>(
         (std::string(PROJECT_SOURCE_DIR) + "/src/shader/diffuse.vs").c_str(),
-        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/diffuse_dep.fs")
-            .c_str());
-    diffuseDepShdrMatPos = glGetUniformLocation(diffuseDepShader->ID, "matrix");
-    assert(diffuseDepShdrMatPos != -1);
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/dep.fs").c_str());
+    dfDepShdrMatPos = glGetUniformLocation(diffuseDepShader->ID, "matrix");
+    assert(dfDepShdrMatPos != -1);
 
     glfwApp->SetSubmitTex2(submitEyeFBO2, sharedStates->renderSz);
 
@@ -123,7 +152,7 @@ static void initRender() {
     try {
         VolCfg cfg(std::string(PROJECT_SOURCE_DIR) + "/cfg/vol_cfg.json");
         spaces = cfg.GetSpaces();
-        rayStep = cfg.GetBaseSpace() * .3f;
+        baseRayStep = cfg.GetBaseSpace() * .3f;
         std::shared_ptr<vs::CompVolume> volume =
             vs::CompVolume::Load(cfg.GetVolumePath().c_str());
         {
@@ -141,6 +170,9 @@ static void initRender() {
         sharedStates->canRun = false;
     }
 
+    prepareMaxVoxPos(SharedStates::MAX_SEARCH_SAMPLE_DIM,
+                     SharedStates::MAX_SEARCH_MIN_SCALAR);
+
     pathRenderer = std::make_unique<GLPathRenderer>(
         std::string(PROJECT_SOURCE_DIR) + "/include/path");
 }
@@ -151,12 +183,14 @@ static void initSignalAndSlots() {
                      sharedStates->scaleW2V);
     });
     statefulSys->Register(
-        std::tie(sharedStates->FAVRLvl, sharedStates->maxStepCnt), [&]() {
+        std::tie(sharedStates->FAVRLvl, sharedStates->maxStepCnt,
+                 sharedStates->scaleW2V),
+        [&]() {
             VRRenderer::RenderParam param;
             param.FAVRLvl = sharedStates->FAVRLvl;
             param.renderSz = sharedStates->renderSz;
             param.maxStepCnt = sharedStates->maxStepCnt;
-            param.step = rayStep;
+            param.step = baseRayStep;
             renderer->SetRenderParam(param);
             spdlog::info("App info: max step count is set to {0}, FAVR level "
                          "is set to {1}.",
@@ -236,12 +270,6 @@ static void initSignalAndSlots() {
                     auto id = pathRenderer->AddSubPath();
                     pathRenderer->StartSubPath(id);
                 }
-
-                auto pos =
-                    W2V * sharedStates->handStates2[VRApp::PathInteractHndIdx]
-                              .pose[3];
-                auto id = pathRenderer->AddVertex(pos);
-                pathRenderer->StartVertex(id);
             } break;
             }
         });
@@ -260,26 +288,103 @@ static void outputToApp() {
 }
 
 static void render() {
-    pathRenderer->PrepareExtraVertex(
-        sharedStates->handStates2[VRApp::PathInteractHndIdx].pose[3]);
-
     std::array<glm::mat4, 2> VP2;
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
         VP2[eyeIdx] = sharedStates->projection2[eyeIdx] *
                       sharedStates->camera.GetViewMat(eyeIdx);
+
+    glm::mat4 interactingCubeM = glm::identity<glm::mat4>();
+    interactingCubeM[3] = {
+        interactingCubeCntrPos =
+            glm::vec3{
+                sharedStates->handStates2[VRApp::PathInteractHndIdx].pose[3]} -
+            SharedStates::INTERACT_CUBE_CNTR_TO_HND_DIST *
+                glm::vec3{sharedStates->handStates2[VRApp::PathInteractHndIdx]
+                              .pose[2]},
+        1.f};
+    std::array<glm::mat4, 2> interactingCubeMVP2;
+    for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
+        interactingCubeMVP2[eyeIdx] = VP2[eyeIdx] * interactingCubeM;
+
     std::array<std::array<glm::mat4, 2>, 2> hndMVP2x2;
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
         for (uint8_t hndIdx = 0; hndIdx < 2; ++hndIdx)
             hndMVP2x2[eyeIdx][hndIdx] =
                 VP2[eyeIdx] * sharedStates->handStates2[hndIdx].pose;
 
-    auto renderHands = [&](uint8_t eyeIdx, GLint matPos) {
+    auto isCalcInteractingPosReady = [&]() {
+        return std::get<0>(interactingPos);
+    };
+    auto getInteractingPos = [&]() -> glm::vec3 & {
+        return std::get<1>(interactingPos);
+    };
+    auto shouldCalcInteractingPos = [&]() {
+        return (sharedStates->interactiveMode == InteractionMode::AddPath ||
+                sharedStates->interactiveMode == InteractionMode::AddVert) &&
+               sharedStates->handStates2[VRApp::PathInteractHndIdx].show;
+    };
+    auto isInteractingPosFound = [&]() {
+        return getInteractingPos().x != NONE_POS_VAL;
+    };
+    auto shouldShowInteractingPos = [&]() {
+        return shouldCalcInteractingPos() && isCalcInteractingPosReady();
+    };
+
+    static bool calculatingInteractingPos = false;
+    if (shouldCalcInteractingPos()) {
+        if (calculatingInteractingPos) {
+            interactingPos = fetchMaxVoxPos();
+            if (isCalcInteractingPosReady()) {
+                glm::vec4 tmp{getInteractingPos(), 1.f};
+                tmp = V2W * tmp;
+                getInteractingPos() = tmp;
+                calculatingInteractingPos = false;
+            } else
+                int x = 0;
+        } else {
+            glm::vec4 cubeMin{interactingCubeCntrPos, 1.f};
+            glm::vec4 cubeMax{cubeMin};
+            cubeMin.x -= SharedStates::INTERACT_CUBE_HF_WID;
+            cubeMin.y -= SharedStates::INTERACT_CUBE_HF_WID;
+            cubeMin.z -= SharedStates::INTERACT_CUBE_HF_WID;
+            cubeMin = W2V * cubeMin;
+            cubeMax.x += SharedStates::INTERACT_CUBE_HF_WID;
+            cubeMax.y += SharedStates::INTERACT_CUBE_HF_WID;
+            cubeMax.z += SharedStates::INTERACT_CUBE_HF_WID;
+            cubeMax = W2V * cubeMax;
+            execMaxVoxPos(cubeMin, cubeMax);
+            calculatingInteractingPos = true;
+        }
+    }
+
+    if (shouldShowInteractingPos())
+        pathRenderer->PrepareExtraVertex(getInteractingPos());
+
+    auto renderHands = [&](uint8_t eyeIdx, bool renderDep) {
+        if (renderDep)
+            diffuseDepShader->use();
+        else
+            diffuseShader->use();
         for (uint8_t hndIdx = 0; hndIdx < 2; ++hndIdx)
             if (sharedStates->handStates2[hndIdx].show) {
-                glUniformMatrix4fv(matPos, 1, GL_FALSE,
+                glUniformMatrix4fv(renderDep ? dfDepShdrMatPos : dfShdrMatPos,
+                                   1, GL_FALSE,
                                    (GLfloat *)&hndMVP2x2[eyeIdx][hndIdx]);
                 sharedStates->handStates2[hndIdx].model->draw();
             }
+
+        if (sharedStates->handStates2[VRApp::PathInteractHndIdx].show) {
+            if (renderDep)
+                cubeDepShader->use();
+            else
+                cubeShader->use();
+            glUniformMatrix4fv(renderDep ? cubeDepShdrMatPos : cubeShdrMatPos,
+                               1, GL_FALSE,
+                               (GLfloat *)&interactingCubeMVP2[eyeIdx]);
+            glBindVertexArray(cubeVAO);
+            glDrawElements(GL_LINES, 24, GL_UNSIGNED_SHORT, (const void *)0);
+            glBindVertexArray(0);
+        }
     };
 
     glEnable(GL_MULTISAMPLE);
@@ -287,36 +392,37 @@ static void render() {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
 
-    glClearColor(1.f, 1.f, 1.f, 1.f); // area without fragments set to FarClip
+    // Pixels without fragments are set to FarClip
+    glClearColor(1.f, 1.f, 1.f, 1.f);
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_FRAMEBUFFER, rndrDepFBO2[eyeIdx]);
         glViewport(0, 0, sharedStates->renderSz.x, sharedStates->renderSz.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        pathRenderer->DrawExtraVertexDepth(GLPathRenderer::selectedVertSize,
-                                           VP2[eyeIdx]);
+        if (shouldShowInteractingPos())
+            pathRenderer->DrawExtraVertexDepth(
+                SharedStates::INTERACT_VERT_HF_WID, VP2[eyeIdx]);
         pathRenderer->DrawDepth(V2W, VP2[eyeIdx]);
 
-        diffuseDepShader->use();
-        renderHands(eyeIdx, diffuseDepShdrMatPos);
+        renderHands(eyeIdx, true);
     }
 
     renderer->Render(sharedStates->renderTarget);
 
-    glClearColor(0, 0, 0, 1.f); // background
+    glClearColor(0, 0, 0, 1.f); // background color
 
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_FRAMEBUFFER, renderFBO2[eyeIdx]);
         glViewport(0, 0, sharedStates->renderSz.x, sharedStates->renderSz.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        pathRenderer->DrawExtraVertex(GLPathRenderer::selectedVertSize,
-                                      VP2[eyeIdx],
-                                      GLPathRenderer::selectedVertColor);
+        if (shouldShowInteractingPos())
+            pathRenderer->DrawExtraVertex(SharedStates::INTERACT_VERT_HF_WID,
+                                          VP2[eyeIdx],
+                                          SharedStates::INTERACT_VERT_COL);
         pathRenderer->Draw(V2W, VP2[eyeIdx]);
 
-        diffuseShader->use();
-        renderHands(eyeIdx, dfShdrMatPos);
+        renderHands(eyeIdx, false);
     }
 
     glDisable(GL_DEPTH_TEST);
@@ -372,6 +478,8 @@ int main(int argc, char **argv) {
         render();
         outputToApp();
     }
+
+    waitForAllVoxAlgorithms();
 
     return 0;
 }

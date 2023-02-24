@@ -31,6 +31,8 @@ __constant__ uint32_t dc_blockOffsets[CompVolVRRenderer::MAX_LOD + 1];
 __constant__ cudaTextureObject_t
     dc_textures[CompVolVRRenderer::MAX_TEX_UNIT_NUM];
 
+static const dim3 threadPerBlock{16, 16};
+
 static uint32_t *d_mappingTable = nullptr;
 __constant__ size_t dc_mappingTableSize = 0;
 __constant__ glm::uvec4 *dc_mappingTableStride4 = nullptr;
@@ -657,7 +659,6 @@ void kouek::CompVolVRRenderer::render(RenderTarget renderTarget) {
 
     switch (renderTarget) {
     case RenderTarget::FullResVol: {
-        dim3 threadPerBlock{16, 16};
         dim3 blockPerGrid{
             (renderSz.x + threadPerBlock.x - 1) / threadPerBlock.x,
             (renderSz.y + threadPerBlock.y - 1) / threadPerBlock.y, 2};

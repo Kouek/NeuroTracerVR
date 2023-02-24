@@ -24,6 +24,14 @@ enum class InteractionMode { SelectVert = 0, AddPath, AddVert, End };
 
 struct SharedStates {
     static constexpr float NEAR_CLIP = .1f, FAR_CLIP = 10.f;
+    static constexpr float MAX_SEARCH_MIN_SCALAR =
+        30.f / 255.f + std::numeric_limits<float>::epsilon();
+    static constexpr float INTERACT_CUBE_HF_WID = .02f;
+    static constexpr float INTERACT_VERT_HF_WID = INTERACT_CUBE_HF_WID * .2f;
+    static constexpr float INTERACT_CUBE_CNTR_TO_HND_DIST = .05f;
+    static constexpr glm::vec3 INTERACT_CUBE_COL{1.f, 1.f, 1.f};
+    static constexpr glm::vec3 INTERACT_VERT_COL{1.f, .5f, 1.f};
+    static constexpr glm::uvec3 MAX_SEARCH_SAMPLE_DIM{128, 128, 128};
 
     bool canRun = true;
     bool canVRRun = false;

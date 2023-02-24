@@ -120,6 +120,48 @@ static std::tuple<GLuint, GLuint, GLuint> createQuad() {
     return {VAO, VBO, EBO};
 }
 
+static std::tuple<GLuint, GLuint, GLuint> createCube(GLfloat cubeHfWid) {
+    GLuint VAO, VBO, EBO;
+    glGenVertexArrays(1, &VAO);
+    glBindVertexArray(VAO);
+    glGenBuffers(1, &VBO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    {
+        std::array<std::array<GLfloat, 3>, 8> verts;
+        for (uint8_t k = 0; k < 8; ++k)
+            verts[k] = {(k & 0x1) == 0 ? -cubeHfWid : +cubeHfWid,
+                        (k & 0x2) == 0 ? -cubeHfWid : +cubeHfWid,
+                        (k & 0x4) == 0 ? -cubeHfWid : +cubeHfWid};
+
+        glBufferData(GL_ARRAY_BUFFER,
+                     sizeof(GLfloat) * verts[0].size() * verts.size(),
+                     verts.data()->data(), GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                              sizeof(GLfloat) * verts[0].size(),
+                              (const void *)(0));
+    }
+
+    glGenBuffers(1, &EBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    {
+        std::array<GLushort, 24> indices{// -Z
+                                         0, 1, 1, 3, 3, 2, 2, 0,
+                                         // +Z
+                                         4, 5, 5, 7, 7, 6, 6, 4,
+                                         // other 4 edges
+                                         0, 4, 1, 5, 2, 6, 3, 7};
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLushort) * indices.size(),
+                     indices.data(), GL_STATIC_DRAW);
+    }
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    return {VAO, VBO, EBO};
+}
+
 } // namespace kouek
 
 #endif // !KOUEK_GL_HELPER_H
