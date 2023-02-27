@@ -9,7 +9,7 @@
 
 namespace kouek {
 
-static constexpr auto NONE_POS_VAL = std::numeric_limits<float>::infinity();
+static constexpr auto NONE_POS_VAL = std::numeric_limits<float>::quiet_NaN();
 
 void prepareMaxVoxPos(const glm::uvec3 &sampleBoxSzVSp, float minScalar);
 void execMaxVoxPos(const glm::vec3 &minVSp, const glm::vec3 &maxVSp);

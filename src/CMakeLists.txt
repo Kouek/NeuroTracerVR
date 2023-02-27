@@ -29,6 +29,7 @@ endforeach()
 add_executable(
 	${TARGET_NAME}
 	${SRCS}
+	${IMGUI_SRC}
 	"${THIRDPARTY_DIR}/glad/src/glad.c"
 )
 set_target_properties(

@@ -48,6 +48,9 @@ find_library(
 	${OPENVR_LIBS_PREFIX}
 )
 
+# imgui dep
+aux_source_directory("${THIRDPARTY_DIR}/imgui" IMGUI_SRC)
+
 # other dep
 foreach(dep "glm" "spdlog" "glfw" "VolumeCompression")
 	add_subdirectory("${THIRDPARTY_DIR}/${dep}")

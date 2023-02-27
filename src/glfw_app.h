@@ -8,6 +8,8 @@
 
 #include <GLFW/glfw3.h>
 
+#include <imgui/imgui.h>
+
 #include <stateful/stateful.hpp>
 
 #include "shared_states.h"
@@ -17,6 +19,8 @@ class GLFWApp {
   private:
     std::array<GLuint, 2> submitFBO2;
     glm::uvec2 submitSz;
+    ImVec2 guiSz;
+    ImVec2 guiPos;
     glm::uvec2 windowSz{1024, 512};
     GLFWwindow *window = nullptr;
 
@@ -31,6 +35,7 @@ class GLFWApp {
                        const glm::uvec2 &renderSz);
     void ProcessInput();
     void ProcessOutput();
+    void RenderGUI();
 
     private:
     void initSignalAndSlots();

@@ -22,14 +22,14 @@ class GLPathRenderer {
     static constexpr GLuint MAX_PATH_NUM = 100;
     static constexpr GLuint NONE = std::numeric_limits<GLuint>::max();
     static constexpr GLuint DIV_NUM = 8;
-    static constexpr GLfloat SCALE = 1.f;
 
-    inline static GLfloat rootVertSize = .025f * SCALE;
-    inline static GLfloat endVertSize = .015f * SCALE;
-    inline static GLfloat selectedVertSize = .03f * SCALE;
-    inline static GLfloat secondSelectedVertSize = .025f * SCALE;
-    inline static GLfloat lineWidth = .0025f * SCALE;
-    inline static GLfloat selectedLineWidth = .005f * SCALE;
+    inline static GLfloat szScale = 1.f;
+    inline static GLfloat rootVertSize = .01f;
+    inline static GLfloat endVertSize = .004f;
+    inline static GLfloat selectedVertSize = .006f;
+    inline static GLfloat secondSelectedVertSize = .005f;
+    inline static GLfloat lineWidth = .0025f;
+    inline static GLfloat selectedLineWidth = .003f;
     inline static glm::vec3 selectedVertColor{1.f, .5f, 1.f};
 
   private:
@@ -491,7 +491,7 @@ class GLPathRenderer {
         if (selectedVertID != NONE) {
             glBindVertexArray(VAO);
             glUniform3fv(vertShader.colPos, 1, &selectedVertColor[0]);
-            glUniform1f(vertShader.szPos, selectedVertSize);
+            glUniform1f(vertShader.szPos, selectedVertSize * szScale);
             glDrawArrays(GL_POINTS, selectedVertID, 1);
         }
 
@@ -500,7 +500,8 @@ class GLPathRenderer {
             lineShader.shader->use();
             glUniform3fv(lineShader.colPos, 1, &path.color[0]);
             glUniform1f(lineShader.widthPos,
-                        id == selectedPathID ? selectedLineWidth : lineWidth);
+                        (id == selectedPathID ? selectedLineWidth : lineWidth) *
+                            szScale);
 
             for (auto &[id, subPath] : path.subPaths) {
                 subPath.upload();
@@ -510,13 +511,13 @@ class GLPathRenderer {
             // draw end verts
             vertShader.shader->use();
             glUniform3fv(vertShader.colPos, 1, &path.color[0]);
-            glUniform1f(vertShader.szPos, endVertSize);
+            glUniform1f(vertShader.szPos, endVertSize * szScale);
             for (auto &[id, subPath] : path.subPaths)
                 subPath.drawEndVerts();
 
             // draw root vert
             glBindVertexArray(VAO);
-            glUniform1f(vertShader.szPos, rootVertSize);
+            glUniform1f(vertShader.szPos, rootVertSize * szScale);
             glDrawArrays(GL_POINTS, path.rootID, 1);
         }
         glBindVertexArray(0);
@@ -530,18 +531,12 @@ class GLPathRenderer {
         glUniformMatrix4fv(vertDepShader.MPos, 1, GL_FALSE, &M[0][0]);
         glUniformMatrix4fv(vertDepShader.VPPos, 1, GL_FALSE, &VP[0][0]);
 
-        // draw selected vert
-        if (selectedVertID != NONE) {
-            glUniform1f(vertDepShader.szPos, selectedVertSize);
-            glBindVertexArray(VAO);
-            glDrawArrays(GL_POINTS, selectedVertID, 1);
-        }
-
         for (auto &[id, path] : paths) {
             // draw lines
             lineDepShader.shader->use();
             glUniform1f(lineDepShader.widthPos,
-                        id == selectedPathID ? selectedLineWidth : lineWidth);
+                        (id == selectedPathID ? selectedLineWidth : lineWidth) *
+                            szScale);
 
             for (auto &[id, subPath] : path.subPaths) {
                 subPath.upload();
@@ -550,12 +545,12 @@ class GLPathRenderer {
 
             // draw end verts
             vertDepShader.shader->use();
-            glUniform1f(vertDepShader.szPos, endVertSize);
+            glUniform1f(vertDepShader.szPos, endVertSize * szScale);
             for (auto &[id, subPath] : path.subPaths)
                 subPath.drawEndVerts();
 
             // draw root vert
-            glUniform1f(vertDepShader.szPos, rootVertSize);
+            glUniform1f(vertDepShader.szPos, rootVertSize * szScale);
             glBindVertexArray(VAO);
             glDrawArrays(GL_POINTS, path.rootID, 1);
         }

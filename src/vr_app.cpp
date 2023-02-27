@@ -177,6 +177,8 @@ void kouek::VRApp::ProcessInput() {
                     actionData.deltaX, actionData.deltaY, actionData.deltaZ};
             }
     }
+
+    processInputToGUI();
 }
 
 void kouek::VRApp::ProcessOutput() {
@@ -222,74 +224,25 @@ void kouek::VRApp::initSignalAndSlots() {
 
     static constexpr auto MOVE_SENSITY = .01f;
 
-    // trackpad -> preTranslate
+    // memu btn -> gui
     statefulSys->Register(
         [&]() {
-            sharedStates->translateW2V += sharedStates->scaleW2V *
-                                          MOVE_SENSITY *
-                                          sharedStates->camera.GetF();
+            if (sharedStates->guiPage == GUIPage::IntrctModePage)
+                sharedStates->guiPage = GUIPage::None;
+            else
+                sharedStates->guiPage = GUIPage::IntrctModePage;
         },
-        std::tie(sharedStates->translateW2V),
+        std::tie(sharedStates->guiPage),
         [&]() {
-            return digitActionActives2[1][actIdxToIdx(
-                       DigitActIdx::TrackpadNClick)] &&
-                   digitActionStates2[1]
-                                     [actIdxToIdx(DigitActIdx::TrackpadNClick)];
-        });
-    statefulSys->Register(
-        [&]() {
-            sharedStates->translateW2V -= sharedStates->scaleW2V *
-                                          MOVE_SENSITY *
-                                          sharedStates->camera.GetF();
-        },
-        std::tie(sharedStates->translateW2V),
-        [&]() {
-            return digitActionActives2[1][actIdxToIdx(
-                       DigitActIdx::TrackpadSClick)] &&
-                   digitActionStates2[1]
-                                     [actIdxToIdx(DigitActIdx::TrackpadSClick)];
-        });
-    statefulSys->Register(
-        [&]() {
-            sharedStates->translateW2V += sharedStates->scaleW2V *
-                                          MOVE_SENSITY *
-                                          sharedStates->camera.GetF();
-        },
-        std::tie(sharedStates->translateW2V),
-        [&]() {
-            return digitActionActives2[1][actIdxToIdx(
-                       DigitActIdx::TrackpadNClick)] &&
-                   digitActionStates2[1]
-                                     [actIdxToIdx(DigitActIdx::TrackpadNClick)];
-        });
-    statefulSys->Register(
-        [&]() {
-            sharedStates->translateW2V += sharedStates->scaleW2V *
-                                          MOVE_SENSITY *
-                                          sharedStates->camera.GetR();
-        },
-        std::tie(sharedStates->translateW2V),
-        [&]() {
-            return digitActionActives2[1][actIdxToIdx(
-                       DigitActIdx::TrackpadEClick)] &&
-                   digitActionStates2[1]
-                                     [actIdxToIdx(DigitActIdx::TrackpadEClick)];
-        });
-    statefulSys->Register(
-        [&]() {
-            sharedStates->translateW2V -= sharedStates->scaleW2V *
-                                          MOVE_SENSITY *
-                                          sharedStates->camera.GetR();
-        },
-        std::tie(sharedStates->translateW2V),
-        [&]() {
-            return digitActionActives2[1][actIdxToIdx(
-                       DigitActIdx::TrackpadWClick)] &&
-                   digitActionStates2[1]
-                                     [actIdxToIdx(DigitActIdx::TrackpadWClick)];
+            return digitActionActives2[PathInteractHndIdx]
+                                      [actIdxToIdx(DigitActIdx::Menu)] &&
+                   digitActionStates2[PathInteractHndIdx]
+                                     [actIdxToIdx(DigitActIdx::Menu)] &&
+                   digitActionChangeds2[PathInteractHndIdx]
+                                       [actIdxToIdx(DigitActIdx::Menu)];
         });
 
-    // trigger -> some actions
+    // trigger -> some interacting actions
     statefulSys->Register(
         [&]() { sharedStates->handStates2[PathInteractHndIdx].clicked = true; },
         std::tie(sharedStates->handStates2[PathInteractHndIdx].clicked),
@@ -305,11 +258,41 @@ void kouek::VRApp::initSignalAndSlots() {
         [&]() { sharedStates->handStates2[PathInteractHndIdx].pressed = true; },
         std::tie(sharedStates->handStates2[PathInteractHndIdx].pressed),
         [&]() {
-            return digitActionActives2[PathInteractHndIdx][actIdxToIdx(
-                       DigitActIdx::TriggerClick)] &&
-                   digitActionStates2[PathInteractHndIdx]
-                                     [actIdxToIdx(DigitActIdx::TriggerClick)] &&
-                   !digitActionChangeds2[PathInteractHndIdx][actIdxToIdx(
-                       DigitActIdx::TriggerClick)];
+            return analogActionActives2[PathInteractHndIdx][actIdxToIdx(
+                       AnalogActIdx::TriggerPull)] &&
+                   analogActionDeltas2[PathInteractHndIdx]
+                                      [actIdxToIdx(AnalogActIdx::TriggerPull)]
+                                          .z > 0.f;
         });
+
+    // Empty func registering
+    statefulSys->SetModified(
+        std::tie(sharedStates->guiIntrctModePageStates.selectedIdx));
+}
+
+void kouek::VRApp::processInputToGUI() {
+    if (sharedStates->guiPage == GUIPage::None)
+        return;
+
+    auto processGUIIntrctModePage = [&]() {
+        auto f = [&](DigitActIdx actIdx, uint8_t callParam) {
+            if (digitActionActives2[PathInteractHndIdx][actIdxToIdx(actIdx)] &&
+                digitActionChangeds2[PathInteractHndIdx][actIdxToIdx(actIdx)] &&
+                !digitActionStates2[PathInteractHndIdx][actIdxToIdx(actIdx)]) {
+                sharedStates->guiIntrctModePageStates.ChangeSelected(callParam);
+                statefulSys->SetModified(std::tie(
+                    sharedStates->guiIntrctModePageStates.selectedIdx));
+            }
+        };
+        f(DigitActIdx::TrackpadWClick, 0);
+        f(DigitActIdx::TrackpadEClick, 1);
+        f(DigitActIdx::TrackpadSClick, 2);
+        f(DigitActIdx::TrackpadNClick, 3);
+    };
+
+    switch (sharedStates->guiPage) {
+    case GUIPage::IntrctModePage:
+        processGUIIntrctModePage();
+        break;
+    }
 }

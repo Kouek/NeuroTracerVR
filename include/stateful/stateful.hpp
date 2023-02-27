@@ -77,6 +77,18 @@ class StatefulSystem {
         }
     }
 
+    inline auto registerAddr(const void *addr) {
+        auto varIdx = addrToIndices.size();
+        if (addrToIndices.find(addr) == addrToIndices.end()) {
+            addrToIndices.emplace(std::piecewise_construct,
+                                  std::forward_as_tuple(addr),
+                                  std::forward_as_tuple(varIdx));
+            modifieds.emplace_back(false);
+        } else
+            varIdx = addrToIndices[addr];
+        return varIdx;
+    }
+
     void analyse() {
         // init dependency graph
         std::vector<size_t> inDegrees(addrToIndices.size(), 0);
@@ -192,28 +204,12 @@ class StatefulSystem {
 
         forTupElemDo<0>(
             [&](const void *addr) {
-                size_t varIdx = addrToIndices.size();
-                if (addrToIndices.find(addr) == addrToIndices.end()) {
-                    addrToIndices.emplace(std::piecewise_construct,
-                                          std::forward_as_tuple(addr),
-                                          std::forward_as_tuple(varIdx));
-                    modifieds.emplace_back(false);
-                } else
-                    varIdx = addrToIndices[addr];
-                funcNode.srcs.emplace_back(varIdx);
+                funcNode.srcs.emplace_back(registerAddr(addr));
             },
             src);
         forTupElemDo<0>(
             [&](const void *addr) {
-                size_t varIdx = addrToIndices.size();
-                if (addrToIndices.find(addr) == addrToIndices.end()) {
-                    addrToIndices.emplace(std::piecewise_construct,
-                                          std::forward_as_tuple(addr),
-                                          std::forward_as_tuple(varIdx));
-                    modifieds.emplace_back(false);
-                } else
-                    varIdx = addrToIndices[addr];
-                funcNode.dsts.emplace_back(varIdx);
+                funcNode.dsts.emplace_back(registerAddr(addr));
             },
             dst);
     }
@@ -225,15 +221,7 @@ class StatefulSystem {
 
         forTupElemDo<0>(
             [&](const void *addr) {
-                size_t varIdx = addrToIndices.size();
-                if (addrToIndices.find(addr) == addrToIndices.end()) {
-                    addrToIndices.emplace(std::piecewise_construct,
-                                          std::forward_as_tuple(addr),
-                                          std::forward_as_tuple(varIdx));
-                    modifieds.emplace_back(false);
-                } else
-                    varIdx = addrToIndices[addr];
-                funcNode.srcs.emplace_back(varIdx);
+                funcNode.srcs.emplace_back(registerAddr(addr));
             },
             src);
     }
@@ -243,17 +231,10 @@ class StatefulSystem {
                   const std::function<bool()> pred = nullptr) {
         unsortedFuncs.emplace_back(func, pred);
         auto &funcNode = unsortedFuncs.back();
+
         forTupElemDo<0>(
             [&](const void *addr) {
-                size_t varIdx = addrToIndices.size();
-                if (addrToIndices.find(addr) == addrToIndices.end()) {
-                    addrToIndices.emplace(std::piecewise_construct,
-                                          std::forward_as_tuple(addr),
-                                          std::forward_as_tuple(varIdx));
-                    modifieds.emplace_back(false);
-                } else
-                    varIdx = addrToIndices[addr];
-                funcNode.dsts.emplace_back(varIdx);
+                funcNode.dsts.emplace_back(registerAddr(addr));
             },
             dst);
 
@@ -263,21 +244,17 @@ class StatefulSystem {
     template <typename... Dst>
     void RegisterExecOnce(const std::function<void()> &func,
                           std::tuple<Dst...> dst) {
+        forTupElemDo<0>([&](const void *addr) { registerAddr(addr); }, dst);
+        func();
+    }
+
+    template <typename... Dst> void SetModified(std::tuple<Dst...> vars) {
         forTupElemDo<0>(
             [&](const void *addr) {
-                size_t varIdx = addrToIndices.size();
-                if (addrToIndices.find(addr) == addrToIndices.end()) {
-                    addrToIndices.emplace(std::piecewise_construct,
-                                          std::forward_as_tuple(addr),
-                                          std::forward_as_tuple(varIdx));
-                    modifieds.emplace_back(true);
-                } else {
-                    varIdx = addrToIndices[addr];
-                    modifieds[varIdx] = true;
-                }
+                auto varIdx = registerAddr(addr);
+                modifieds[varIdx] = true;
             },
-            dst);
-        func();
+            vars);
     }
 
     void Update() {

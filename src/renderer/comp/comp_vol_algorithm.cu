@@ -60,6 +60,7 @@ __global__ void maxXYZVoxKernel(BufElem *outBuf, glm::vec3 rangeVSp,
 
     BufElem bufElem;
     bufElem.scalar = 0.f;
+    bufElem.pos = glm::vec3{NONE_POS_VAL};
 
     auto step3 = rangeVSp;
     step3.x /= (float)dc_maxVoxParam.sampleBoxSz.x;
@@ -76,15 +77,12 @@ __global__ void maxXYZVoxKernel(BufElem *outBuf, glm::vec3 rangeVSp,
         if (scalar < dc_maxVoxParam.minScalar)
             continue;
         
-        if (scalar > bufElem.scalar) {
+        if (bufElem.scalar < scalar) {
             bufElem.scalar = scalar;
             bufElem.pos = pos;
         }
     }
 
-    if(bufElem.scalar == 0.f)
-        // no valid voxel found
-        bufElem.pos.x = NONE_POS_VAL;
     outBuf[(size_t)yz[1] * dc_maxVoxParam.sampleBoxSz.z + yz[0]] = bufElem;
 }
 
@@ -95,7 +93,7 @@ void kouek::execMaxVoxPos(const glm::vec3 &minVSp, const glm::vec3 &maxVSp) {
     maxXYZVoxKernel<<<blockPerGrid, threadPerBlock, 0, algorithmStream>>>(
         thrust::raw_pointer_cast(YZBuf.data()), maxVSp - minVSp, minVSp);
 
-    BufElem initVal{glm::zero<glm::vec3>(), 0.f};
+    BufElem initVal{glm::vec3{NONE_POS_VAL}, 0.f};
     maxPosFuture =
         thrust::async::reduce(thrust::device.on(algorithmStream), YZBuf.begin(),
                               YZBuf.end(), initVal, thrust::maximum<BufElem>());

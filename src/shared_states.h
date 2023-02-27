@@ -20,7 +20,69 @@ struct HandStates {
     std::string modelName;
 };
 
-enum class InteractionMode { SelectVert = 0, AddPath, AddVert, End };
+enum class InteractionMode {
+    SelectVert = 0,
+    AddPath,
+    AddVert,
+    MoveVert,
+    DeleteVert,
+    JoinPath,
+    End
+};
+enum class GUIPage { None = 0, IntrctModePage, End };
+
+// Selectable Widget in ImGui doesn't support text wrapping currently.
+// Thus we use a \n to keep texts in the view scope.
+static inline constexpr std::array InteractionModeNames{
+    "Select\nVertex", "Add\nPath",      "Add\nVertex",
+    "Move\nVertex",   "Delete\nVertex", "Join\nPath"};
+static inline constexpr std::array GUIPageNames{"None",
+                                                "Select Interaction Mode"};
+
+struct GUIIntrctModePageStates {
+    static constexpr uint8_t ROW_NUM = 3;
+    static constexpr uint8_t COL_NUM = 3;
+
+    std::array<bool, static_cast<size_t>(InteractionMode::End)> selecteds;
+    uint8_t selectedIdx = 0;
+
+    GUIIntrctModePageStates() {
+        std::fill(selecteds.begin(), selecteds.end(), false);
+        selecteds[selectedIdx] = true;
+    }
+
+    /// <summary>
+    /// Change the current selected element
+    /// to one element lft, rht, down or up direction.
+    /// </summary>
+    /// <param name="dir">0 for lft, 1 for rht, 2 for down and 3 for up</param>
+    void ChangeSelected(uint8_t dir) {
+        if (dir == 0 && selectedIdx >= 1 &&
+            (selectedIdx / COL_NUM == (selectedIdx - 1) / COL_NUM)) {
+            selecteds[selectedIdx] = false;
+            selectedIdx -= 1;
+            selecteds[selectedIdx] = true;
+        } else if (dir == 1 && selectedIdx < selecteds.size() - 1 &&
+            (selectedIdx / COL_NUM == (selectedIdx + 1) / COL_NUM)) {
+            selecteds[selectedIdx] = false;
+            selectedIdx += 1;
+            selecteds[selectedIdx] = true;
+        } else if (dir == 2 && selectedIdx < selecteds.size() - COL_NUM) {
+            selecteds[selectedIdx] = false;
+            selectedIdx += COL_NUM;
+            selecteds[selectedIdx] = true;
+        } else if (dir == 3 && selectedIdx >= COL_NUM) {
+            selecteds[selectedIdx] = false;
+            selectedIdx -= COL_NUM;
+            selecteds[selectedIdx] = true;
+        }
+    }
+    inline void ChangeSelected(InteractionMode mode) {
+        selecteds[selectedIdx] = false;
+        selectedIdx = static_cast<decltype(selectedIdx)>(mode);
+        selecteds[selectedIdx] = true;
+    }
+};
 
 struct SharedStates {
     static constexpr float NEAR_CLIP = .1f, FAR_CLIP = 10.f;
@@ -37,7 +99,8 @@ struct SharedStates {
     bool canVRRun = false;
 
     VRRenderer::RenderTarget renderTarget = VRRenderer::RenderTarget::FAVRVol;
-    InteractionMode interactiveMode = InteractionMode::AddPath;
+    InteractionMode interactiveMode = InteractionMode::SelectVert;
+    GUIPage guiPage = GUIPage::None;
 
     uint8_t FAVRLvl = 4;
     uint32_t maxStepCnt = 1000;
@@ -56,6 +119,7 @@ struct SharedStates {
 
     DualEyeCamera camera;
     std::array<HandStates, 2> handStates2;
+    GUIIntrctModePageStates guiIntrctModePageStates;
 
     SharedStates(StatefulSystem &statefulSys) {
         statefulSys.RegisterExecOnce(
@@ -68,10 +132,8 @@ struct SharedStates {
                                 glm::vec3{.5f, .5f, 0}, glm::vec3{0, 1.f, 0})});
             },
             std::tie(camera));
-        auto doNothing = []() {};
-        statefulSys.RegisterExecOnce(
-            doNothing, std::tie(FAVRLvl, maxStepCnt, renderSz, scaleW2V,
-                                translateW2V, projection2));
+        statefulSys.SetModified(std::tie(FAVRLvl, maxStepCnt, renderSz,
+                                         scaleW2V, translateW2V, projection2));
     }
 };
 

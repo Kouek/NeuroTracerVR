@@ -67,6 +67,13 @@ static GLuint quadVAO, quadVBO, quadEBO;
 static std::unique_ptr<Shader> quadShader, diffuseShader, diffuseDepShader;
 static GLint dfShdrMatPos, dfDepShdrMatPos;
 
+inline auto isCalcInteractingPosReady() { return std::get<0>(interactingPos); };
+inline glm::vec3 &refInteractingPos() { return std::get<1>(interactingPos); };
+inline auto isInteractingPosFound() {
+    return isCalcInteractingPosReady() &&
+           refInteractingPos().x == refInteractingPos().x;
+};
+
 static void initRender() {
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         std::tie(renderFBO2[eyeIdx], renderTex2[eyeIdx], renderDep2[eyeIdx]) =
@@ -214,6 +221,9 @@ static void initSignalAndSlots() {
             }
             renderer->SetProjectionParam(param);
         });
+    statefulSys->Register(std::tie(sharedStates->scaleW2V), [&]() {
+        pathRenderer->szScale = sharedStates->scaleW2V;
+    });
     statefulSys->Register(
         std::tie(sharedStates->scaleW2V, sharedStates->translateW2V), [&]() {
             W2V = glm::scale(glm::translate(glm::identity<glm::mat4>(),
@@ -251,27 +261,45 @@ static void initSignalAndSlots() {
     statefulSys->Register(
         std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].clicked),
         [&]() {
+            if (sharedStates->guiPage != GUIPage::None)
+                return;
+
             switch (sharedStates->interactiveMode) {
             case InteractionMode::SelectVert:
                 break;
-            case InteractionMode::AddPath: {
-                auto &col = colTbl.NextColor();
-                auto pos =
-                    W2V * sharedStates->handStates2[VRApp::PathInteractHndIdx]
-                              .pose[3];
-                auto id = pathRenderer->AddPath(col, pos);
+            case InteractionMode::AddPath:
+                if (isInteractingPosFound()) {
+                    auto &col = colTbl.NextColor();
+                    auto pos = W2V * glm::vec4{refInteractingPos(), 1.f};
+                    auto id = pathRenderer->AddPath(col, pos);
 
-                pathRenderer->StartPath(id);
-                sharedStates->interactiveMode = InteractionMode::AddVert;
-            } break;
-            case InteractionMode::AddVert: {
-                if (pathRenderer->GetSelectedSubPathID() ==
-                    GLPathRenderer::NONE) {
-                    auto id = pathRenderer->AddSubPath();
-                    pathRenderer->StartSubPath(id);
+                    pathRenderer->StartPath(id);
+
+                    sharedStates->interactiveMode = InteractionMode::AddVert;
+                    sharedStates->guiIntrctModePageStates.ChangeSelected(
+                        sharedStates->interactiveMode);
                 }
-            } break;
+                break;
+            case InteractionMode::AddVert:
+                if (isInteractingPosFound()) {
+                    if (pathRenderer->GetSelectedSubPathID() ==
+                        GLPathRenderer::NONE) {
+                        auto id = pathRenderer->AddSubPath();
+                        pathRenderer->StartSubPath(id);
+                    }
+
+                    auto pos = W2V * glm::vec4{refInteractingPos(), 1.f};
+                    auto id = pathRenderer->AddVertex(pos);
+
+                    pathRenderer->StartVertex(id);
+                }
+                break;
             }
+        });
+    statefulSys->Register(
+        std::tie(sharedStates->guiIntrctModePageStates.selectedIdx), [&]() {
+            sharedStates->interactiveMode = static_cast<InteractionMode>(
+                sharedStates->guiIntrctModePageStates.selectedIdx);
         });
 }
 
@@ -312,22 +340,13 @@ static void render() {
             hndMVP2x2[eyeIdx][hndIdx] =
                 VP2[eyeIdx] * sharedStates->handStates2[hndIdx].pose;
 
-    auto isCalcInteractingPosReady = [&]() {
-        return std::get<0>(interactingPos);
-    };
-    auto getInteractingPos = [&]() -> glm::vec3 & {
-        return std::get<1>(interactingPos);
-    };
     auto shouldCalcInteractingPos = [&]() {
         return (sharedStates->interactiveMode == InteractionMode::AddPath ||
                 sharedStates->interactiveMode == InteractionMode::AddVert) &&
                sharedStates->handStates2[VRApp::PathInteractHndIdx].show;
     };
-    auto isInteractingPosFound = [&]() {
-        return getInteractingPos().x != NONE_POS_VAL;
-    };
     auto shouldShowInteractingPos = [&]() {
-        return shouldCalcInteractingPos() && isCalcInteractingPosReady();
+        return shouldCalcInteractingPos() && isInteractingPosFound();
     };
 
     static bool calculatingInteractingPos = false;
@@ -335,12 +354,11 @@ static void render() {
         if (calculatingInteractingPos) {
             interactingPos = fetchMaxVoxPos();
             if (isCalcInteractingPosReady()) {
-                glm::vec4 tmp{getInteractingPos(), 1.f};
+                glm::vec4 tmp{refInteractingPos(), 1.f};
                 tmp = V2W * tmp;
-                getInteractingPos() = tmp;
+                refInteractingPos() = tmp;
                 calculatingInteractingPos = false;
-            } else
-                int x = 0;
+            }
         } else {
             glm::vec4 cubeMin{interactingCubeCntrPos, 1.f};
             glm::vec4 cubeMax{cubeMin};
@@ -358,7 +376,7 @@ static void render() {
     }
 
     if (shouldShowInteractingPos())
-        pathRenderer->PrepareExtraVertex(getInteractingPos());
+        pathRenderer->PrepareExtraVertex(refInteractingPos());
 
     auto renderHands = [&](uint8_t eyeIdx, bool renderDep) {
         if (renderDep)
@@ -384,6 +402,13 @@ static void render() {
             glBindVertexArray(cubeVAO);
             glDrawElements(GL_LINES, 24, GL_UNSIGNED_SHORT, (const void *)0);
             glBindVertexArray(0);
+        }
+    };
+
+    auto getGUIRenderEyeIdx = [&]() -> uint8_t {
+        switch (sharedStates->guiPage) {
+        case GUIPage::IntrctModePage:
+            return 1;
         }
     };
 
@@ -442,6 +467,9 @@ static void render() {
 
     glDisable(GL_MULTISAMPLE);
     glDisable(GL_BLEND);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, renderFBO2[getGUIRenderEyeIdx()]);
+    glfwApp->RenderGUI();
 
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, renderFBO2[eyeIdx]);

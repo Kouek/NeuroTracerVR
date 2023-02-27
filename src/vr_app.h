@@ -12,6 +12,7 @@ namespace kouek {
 class VRApp {
   public:
     static constexpr uint8_t PathInteractHndIdx = 1;
+    static constexpr uint8_t VolInteractHndIdx = 1;
 
   private:
     enum class DigitActIdx : uint8_t {
@@ -80,6 +81,7 @@ class VRApp {
 
   private:
     void initSignalAndSlots();
+    void processInputToGUI();
 };
 } // namespace kouek
 
