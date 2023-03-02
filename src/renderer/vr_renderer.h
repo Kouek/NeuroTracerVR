@@ -36,18 +36,21 @@ class VRRenderer {
     };
 
     /// <summary>
-    /// In World Space, but after pre-translated and pre-scaled(angle kept)
+    /// All values are given in Volume Render Space.
     /// </summary>
     struct CameraParam {
-        float OBBBorderDistToEyeCntr;
-        glm::vec3 OBBHfSz;
-        glm::vec3 pos2[2];
+        glm::vec3 headPos;
+        glm::vec3 eyePos2[2];
         glm::mat3 rotation;
     };
 
+    /// <summary>
+    /// All values are given in Volume Render Space.
+    /// </summary>
     struct ProjectionParam {
+        float nearClip, farClip;
         glm::mat4 unProjection2[2];
-        float projection22[2], projection23[2];
+        float projection222[2], projection223[2];
     };
 
     enum class RenderTarget : uint8_t {

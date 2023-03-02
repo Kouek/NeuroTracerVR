@@ -29,10 +29,11 @@ static std::unique_ptr<VRApp> vrApp;
 
 static glm::vec3 spaces;
 static float baseRayStep;
-static glm::mat4 W2V;
-static glm::mat4 V2W;
+static glm::mat4 W2VR;
+static glm::mat4 VR2W;
 static uint32_t blockLength, noPaddingBlockLength;
 static VRRenderer::CameraParam camParam;
+static VRRenderer::ProjectionParam projParam;
 
 static std::unique_ptr<VRRenderer> renderer;
 static std::unique_ptr<GLPathRenderer> pathRenderer;
@@ -56,7 +57,7 @@ static std::array<GLuint, 2> rndrDepTex2;
 static std::array<GLuint, 2> rndrDepDep2;
 static std::array<GLuint, 2> rndrDepFBO2;
 
-static std::array<GLuint, 2> fromRendererEyeTex2;
+static std::array<GLuint, 2> volRenderTex;
 
 // Objects except for volume and hand model
 static GLuint cubeVAO, cubeVBO, cubeEBO;
@@ -87,8 +88,8 @@ static void initRender() {
                  rndrDepDep2[eyeIdx]) =
             createFrambuffer(sharedStates->renderSz.x,
                              sharedStates->renderSz.y);
-        fromRendererEyeTex2[eyeIdx] = createPlainTexture(
-            sharedStates->renderSz.x, sharedStates->renderSz.y);
+        volRenderTex[eyeIdx] = createPlainTexture(sharedStates->renderSz.x,
+                                                  sharedStates->renderSz.y);
     }
     if (sharedStates->canVRRun)
         vrApp->SetSubmitTex2(submitEyeTex2);
@@ -142,7 +143,7 @@ static void initRender() {
     }
     {
         VRRenderer::CUDAxGLParam param;
-        param.outputTex2 = fromRendererEyeTex2;
+        param.outputTex2 = volRenderTex;
         param.inputDepTex2 = rndrDepTex2;
         param.renderSz = sharedStates->renderSz;
         renderer->SetCUDAxGLParam(param);
@@ -159,7 +160,7 @@ static void initRender() {
     try {
         VolCfg cfg(std::string(PROJECT_SOURCE_DIR) + "/cfg/vol_cfg.json");
         spaces = cfg.GetSpaces();
-        baseRayStep = cfg.GetBaseSpace() * .3f;
+        baseRayStep = cfg.GetBaseSpace();
         std::shared_ptr<vs::CompVolume> volume =
             vs::CompVolume::Load(cfg.GetVolumePath().c_str());
         {
@@ -185,75 +186,105 @@ static void initRender() {
 }
 
 static void initSignalAndSlots() {
-    statefulSys->Register(std::tie(sharedStates->scaleW2V), [&]() {
+    statefulSys->Register(std::tie(sharedStates->preScale), [&]() {
         spdlog::info("App info: max step count is set to {0}",
-                     sharedStates->scaleW2V);
+                     sharedStates->preScale);
     });
     statefulSys->Register(
         std::tie(sharedStates->FAVRLvl, sharedStates->maxStepCnt,
-                 sharedStates->scaleW2V),
+                 sharedStates->antiMoireStepMult),
         [&]() {
             VRRenderer::RenderParam param;
             param.FAVRLvl = sharedStates->FAVRLvl;
             param.renderSz = sharedStates->renderSz;
             param.maxStepCnt = sharedStates->maxStepCnt;
-            param.step = baseRayStep;
+            param.step = baseRayStep * sharedStates->antiMoireStepMult;
             renderer->SetRenderParam(param);
-            spdlog::info("App info: max step count is set to {0}, FAVR level "
-                         "is set to {1}.",
-                         sharedStates->maxStepCnt, sharedStates->FAVRLvl);
         });
     statefulSys->Register(
-        std::tie(sharedStates->projection2, sharedStates->scaleW2V), [&]() {
-            VRRenderer::ProjectionParam param;
-            param.unProjection2[0] =
+        std::tie(sharedStates->projection2, sharedStates->preScale,
+                 sharedStates->eyeToHeadTranslate2),
+        [&]() {
+            projParam.nearClip =
+                sharedStates->preScale * SharedStates::NEAR_CLIP;
+            projParam.farClip = sharedStates->preScale * SharedStates::FAR_CLIP;
+            projParam.unProjection2[0] =
                 Math::InverseProjective(sharedStates->projection2[0]);
-            param.unProjection2[1] =
+            projParam.unProjection2[1] =
                 Math::InverseProjective(sharedStates->projection2[1]);
             for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
-                param.projection22[eyeIdx] =
+                projParam.projection222[eyeIdx] =
                     -(sharedStates->FAR_CLIP + sharedStates->NEAR_CLIP) /
                     (sharedStates->FAR_CLIP - sharedStates->NEAR_CLIP);
-                param.projection23[eyeIdx] =
-                    -2.f * sharedStates->scaleW2V * sharedStates->scaleW2V *
+                projParam.projection223[eyeIdx] =
+                    -2.f * sharedStates->preScale * sharedStates->preScale *
                     sharedStates->FAR_CLIP * sharedStates->NEAR_CLIP /
                     (sharedStates->FAR_CLIP - sharedStates->NEAR_CLIP);
             }
-            renderer->SetProjectionParam(param);
-        });
-    statefulSys->Register(std::tie(sharedStates->scaleW2V), [&]() {
-        pathRenderer->szScale = sharedStates->scaleW2V;
+
+            CompVolVRRenderer::CamPyramidParam camPyramidParam;
+            for (uint8_t i = 0; i < 4; ++i) {
+                auto v4 = projParam.unProjection2[i & 0b1] *
+                          glm::vec4{(i & 0b01) == 0 ? -1.f : +1.f,
+                                    (i & 0b10) == 0 ? -1.f : +1.f, 1.f, 1.f};
+                camPyramidParam.pos4[i] = v4;
+                camPyramidParam.pos4[i] =
+                    glm::normalize(camPyramidParam.pos4[i]);
+                auto t = projParam.nearClip / fabsf(camPyramidParam.pos4[i].z);
+                camPyramidParam.pos4[i] *= t;
+                camPyramidParam.pos4[i] +=
+                    sharedStates->preScale *
+                    sharedStates->eyeToHeadTranslate2[i & 0b1];
+            }
+            for (uint8_t i = 0; i < 3; ++i)
+                for (uint8_t xy = 0; xy < 2; ++xy)
+                    if (auto tmp = fabsf(camPyramidParam.pos4[i][xy]);
+                        camPyramidParam.pos4[3][xy] < tmp)
+                        camPyramidParam.pos4[3][xy] = tmp;
+            for (uint8_t i = 0; i < 3; ++i)
+                camPyramidParam.pos4[i] = {
+                    (i & 0b01) == 0 ? -camPyramidParam.pos4[3].x
+                                    : +camPyramidParam.pos4[3].x,
+                    (i & 0b10) == 0 ? -camPyramidParam.pos4[3].y
+                                    : +camPyramidParam.pos4[3].y,
+                    camPyramidParam.pos4[3].z};
+            dynamic_cast<CompVolVRRenderer *>(renderer.get())
+                ->SetCameraPyramidParam(camPyramidParam);
+        },
+        std::tie(projParam));
+    statefulSys->Register(std::tie(projParam),
+                          [&]() { renderer->SetProjectionParam(projParam); });
+    statefulSys->Register(std::tie(sharedStates->preScale), [&]() {
+        pathRenderer->szScale = sharedStates->preScale;
     });
     statefulSys->Register(
-        std::tie(sharedStates->scaleW2V, sharedStates->translateW2V), [&]() {
-            W2V = glm::scale(glm::translate(glm::identity<glm::mat4>(),
-                                            sharedStates->translateW2V),
-                             glm::vec3{sharedStates->scaleW2V});
-            V2W = glm::translate(
-                glm::scale(glm::identity<glm::mat4>(),
-                           glm::vec3{1.f / sharedStates->scaleW2V}),
-                -sharedStates->translateW2V);
+        std::tie(sharedStates->preScale, sharedStates->preTranslate), [&]() {
+            W2VR = glm::mat4(sharedStates->preScale, 0.f, 0.f, 0.f, 0.f,
+                             sharedStates->preScale, 0.f, 0.f, 0.f, 0.f,
+                             sharedStates->preScale, 0.f,
+                             sharedStates->preTranslate.x,
+                             sharedStates->preTranslate.y,
+                             sharedStates->preTranslate.z, 1.f);
+            auto invPreScale = 1.f / sharedStates->preScale;
+            VR2W = glm::mat4(invPreScale, 0.f, 0.f, 0.f, 0.f, invPreScale, 0.f,
+                             0.f, 0.f, 0.f, invPreScale, 0.f,
+                             -invPreScale * sharedStates->preTranslate.x,
+                             -invPreScale * sharedStates->preTranslate.y,
+                             -invPreScale * sharedStates->preTranslate.z, 1.f);
         });
     statefulSys->Register(
-        std::tie(sharedStates->scaleW2V, sharedStates->translateW2V,
+        std::tie(sharedStates->preScale, sharedStates->preTranslate,
                  sharedStates->camera),
         [&]() {
             auto [R, F, U, PL, PR] = sharedStates->camera.GetRFUP2();
-            camParam.pos2[0] =
-                (sharedStates->scaleW2V * PL) + sharedStates->translateW2V;
-            camParam.pos2[1] =
-                (sharedStates->scaleW2V * PR) + sharedStates->translateW2V;
+            camParam.headPos =
+                (sharedStates->preScale * sharedStates->camera.GetHeadPos()) +
+                sharedStates->preTranslate;
+            camParam.eyePos2[0] =
+                (sharedStates->preScale * PL) + sharedStates->preTranslate;
+            camParam.eyePos2[1] =
+                (sharedStates->preScale * PR) + sharedStates->preTranslate;
             camParam.rotation = {R, U, -F};
-        },
-        std::tie(camParam));
-    statefulSys->Register(
-        std::tie(sharedStates->scaleW2V),
-        [&]() {
-            camParam.OBBBorderDistToEyeCntr =
-                sharedStates->scaleW2V * SharedStates::NEAR_CLIP;
-            camParam.OBBHfSz.x = .25f * noPaddingBlockLength * spaces.x;
-            camParam.OBBHfSz.y = .25f * noPaddingBlockLength * spaces.y;
-            camParam.OBBHfSz.z = .125f * noPaddingBlockLength * spaces.z;
         },
         std::tie(camParam));
     statefulSys->Register(std::tie(camParam),
@@ -270,7 +301,7 @@ static void initSignalAndSlots() {
             case InteractionMode::AddPath:
                 if (isInteractingPosFound()) {
                     auto &col = colTbl.NextColor();
-                    auto pos = W2V * glm::vec4{refInteractingPos(), 1.f};
+                    auto pos = W2VR * glm::vec4{refInteractingPos(), 1.f};
                     auto id = pathRenderer->AddPath(col, pos);
 
                     pathRenderer->StartPath(id);
@@ -288,7 +319,7 @@ static void initSignalAndSlots() {
                         pathRenderer->StartSubPath(id);
                     }
 
-                    auto pos = W2V * glm::vec4{refInteractingPos(), 1.f};
+                    auto pos = W2VR * glm::vec4{refInteractingPos(), 1.f};
                     auto id = pathRenderer->AddVertex(pos);
 
                     pathRenderer->StartVertex(id);
@@ -355,7 +386,7 @@ static void render() {
             interactingPos = fetchMaxVoxPos();
             if (isCalcInteractingPosReady()) {
                 glm::vec4 tmp{refInteractingPos(), 1.f};
-                tmp = V2W * tmp;
+                tmp = VR2W * tmp;
                 refInteractingPos() = tmp;
                 calculatingInteractingPos = false;
             }
@@ -365,11 +396,11 @@ static void render() {
             cubeMin.x -= SharedStates::INTERACT_CUBE_HF_WID;
             cubeMin.y -= SharedStates::INTERACT_CUBE_HF_WID;
             cubeMin.z -= SharedStates::INTERACT_CUBE_HF_WID;
-            cubeMin = W2V * cubeMin;
+            cubeMin = W2VR * cubeMin;
             cubeMax.x += SharedStates::INTERACT_CUBE_HF_WID;
             cubeMax.y += SharedStates::INTERACT_CUBE_HF_WID;
             cubeMax.z += SharedStates::INTERACT_CUBE_HF_WID;
-            cubeMax = W2V * cubeMax;
+            cubeMax = W2VR * cubeMax;
             execMaxVoxPos(cubeMin, cubeMax);
             calculatingInteractingPos = true;
         }
@@ -427,7 +458,7 @@ static void render() {
         if (shouldShowInteractingPos())
             pathRenderer->DrawExtraVertexDepth(
                 SharedStates::INTERACT_VERT_HF_WID, VP2[eyeIdx]);
-        pathRenderer->DrawDepth(V2W, VP2[eyeIdx]);
+        pathRenderer->DrawDepth(VR2W, VP2[eyeIdx]);
 
         renderHands(eyeIdx, true);
     }
@@ -445,7 +476,7 @@ static void render() {
             pathRenderer->DrawExtraVertex(SharedStates::INTERACT_VERT_HF_WID,
                                           VP2[eyeIdx],
                                           SharedStates::INTERACT_VERT_COL);
-        pathRenderer->Draw(V2W, VP2[eyeIdx]);
+        pathRenderer->Draw(VR2W, VP2[eyeIdx]);
 
         renderHands(eyeIdx, false);
     }
@@ -460,7 +491,7 @@ static void render() {
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
         glBindFramebuffer(GL_FRAMEBUFFER, renderFBO2[eyeIdx]);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, fromRendererEyeTex2[eyeIdx]);
+        glBindTexture(GL_TEXTURE_2D, volRenderTex[eyeIdx]);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr);
     }
     glBindVertexArray(0);

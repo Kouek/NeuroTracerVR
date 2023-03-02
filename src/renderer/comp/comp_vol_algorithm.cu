@@ -36,22 +36,22 @@ static cudaStream_t algorithmStream = nullptr;
 static thrust::future<thrust::cuda_cub::execute_on_stream, BufElem>
     maxPosFuture;
 
-void kouek::prepareMaxVoxPos(const glm::uvec3 &sampleBoxSzVSp,
+void kouek::prepareMaxVoxPos(const glm::uvec3 &sampleBoxSzVRSp,
                              float minScalar) {
     if (algorithmStream == nullptr)
         CUDA_RUNTIME_CHECK(cudaStreamCreate(&algorithmStream));
 
-    maxVoxParam.sampleBoxSz = sampleBoxSzVSp;
+    maxVoxParam.sampleBoxSz = sampleBoxSzVRSp;
     maxVoxParam.minScalar = minScalar;
     CUDA_RUNTIME_API_CALL(
         cudaMemcpyToSymbol(dc_maxVoxParam, &maxVoxParam, sizeof(maxVoxParam)));
-    YZBuf.resize((size_t)sampleBoxSzVSp.y * sampleBoxSzVSp.z);
+    YZBuf.resize((size_t)sampleBoxSzVRSp.y * sampleBoxSzVRSp.z);
 }
 
 extern __device__ float virtualSampleLOD0(const glm::vec3 &samplePos);
 
-__global__ void maxXYZVoxKernel(BufElem *outBuf, glm::vec3 rangeVSp,
-                                glm::vec3 minVSp) {
+__global__ void maxXYZVoxKernel(BufElem *outBuf, glm::vec3 rangeVRSp,
+                                glm::vec3 minVRSp) {
     glm::uvec2 yz{blockIdx.x * blockDim.x + threadIdx.x,
                   blockIdx.y * blockDim.y + threadIdx.y};
     if (yz[0] >= dc_maxVoxParam.sampleBoxSz.y ||
@@ -62,12 +62,12 @@ __global__ void maxXYZVoxKernel(BufElem *outBuf, glm::vec3 rangeVSp,
     bufElem.scalar = 0.f;
     bufElem.pos = glm::vec3{NONE_POS_VAL};
 
-    auto step3 = rangeVSp;
+    auto step3 = rangeVRSp;
     step3.x /= (float)dc_maxVoxParam.sampleBoxSz.x;
     step3.y /= (float)dc_maxVoxParam.sampleBoxSz.y;
     step3.z /= (float)dc_maxVoxParam.sampleBoxSz.z;
 
-    auto pos = minVSp;
+    auto pos = minVRSp;
     pos.y += step3.y * yz[0];
     pos.z += step3.z * yz[1];
     for (glm::uint stepCnt = 0; stepCnt < dc_maxVoxParam.sampleBoxSz.x;
@@ -86,12 +86,12 @@ __global__ void maxXYZVoxKernel(BufElem *outBuf, glm::vec3 rangeVSp,
     outBuf[(size_t)yz[1] * dc_maxVoxParam.sampleBoxSz.z + yz[0]] = bufElem;
 }
 
-void kouek::execMaxVoxPos(const glm::vec3 &minVSp, const glm::vec3 &maxVSp) {
+void kouek::execMaxVoxPos(const glm::vec3 &minVRSp, const glm::vec3 &maxVRSp) {
     dim3 blockPerGrid{
         (maxVoxParam.sampleBoxSz.y + threadPerBlock.x - 1) / threadPerBlock.x,
         (maxVoxParam.sampleBoxSz.z + threadPerBlock.y - 1) / threadPerBlock.y};
     maxXYZVoxKernel<<<blockPerGrid, threadPerBlock, 0, algorithmStream>>>(
-        thrust::raw_pointer_cast(YZBuf.data()), maxVSp - minVSp, minVSp);
+        thrust::raw_pointer_cast(YZBuf.data()), maxVRSp - minVRSp, minVRSp);
 
     BufElem initVal{glm::vec3{NONE_POS_VAL}, 0.f};
     maxPosFuture =

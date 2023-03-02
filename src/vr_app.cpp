@@ -178,6 +178,7 @@ void kouek::VRApp::ProcessInput() {
             }
     }
 
+    processInputToRender();
     processInputToGUI();
 }
 
@@ -208,17 +209,24 @@ void kouek::VRApp::initSignalAndSlots() {
         std::tie(sharedStates->camera));
 
     statefulSys->Register(
-        std::tie(sharedStates->scaleW2V),
+        [&]() {
+            sharedStates->eyeToHeadTranslate2[0] = eyeToHeadMat2[0][3];
+            sharedStates->eyeToHeadTranslate2[1] = eyeToHeadMat2[1][3];
+        },
+        std::tie(sharedStates->eyeToHeadTranslate2));
+
+    statefulSys->Register(
+        std::tie(sharedStates->preScale, sharedStates->eyeToHeadTranslate2),
         [&]() {
             sharedStates->camera.SetEyeToHead(
-                sharedStates->scaleW2V * eyeToHeadMat2[0][3],
-                sharedStates->scaleW2V * eyeToHeadMat2[1][3]);
+                sharedStates->preScale * sharedStates->eyeToHeadTranslate2[0],
+                sharedStates->preScale * sharedStates->eyeToHeadTranslate2[1]);
             for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
                 sharedStates->projection2[eyeIdx] =
                     SteamVRMat44ToGLMMat4(HMD->GetProjectionMatrix(
                         static_cast<vr::EVREye>(eyeIdx),
-                        sharedStates->scaleW2V * SharedStates::NEAR_CLIP,
-                        sharedStates->scaleW2V * SharedStates::FAR_CLIP));
+                        sharedStates->preScale * SharedStates::NEAR_CLIP,
+                        sharedStates->preScale * SharedStates::FAR_CLIP));
         },
         std::tie(sharedStates->camera, sharedStates->projection2));
 
@@ -270,9 +278,49 @@ void kouek::VRApp::initSignalAndSlots() {
         std::tie(sharedStates->guiIntrctModePageStates.selectedIdx));
 }
 
+void kouek::VRApp::processInputToRender() {
+    if (sharedStates->guiPage != GUIPage::None)
+        return; // when drawing GUI, don't process inputs to affect rendering
+
+    auto processPreScale = [&](DigitActIdx actIdx, bool larger) {
+        if (digitActionActives2[PathInteractHndIdx][actIdxToIdx(actIdx)] &&
+            digitActionStates2[PathInteractHndIdx][actIdxToIdx(actIdx)]) {
+            sharedStates->preScale += larger
+                                          ? SharedStates::PRE_SCALE_CHNG_STEP
+                                          : -SharedStates::PRE_SCALE_CHNG_STEP;
+            statefulSys->SetModified(std::tie(sharedStates->preScale));
+        }
+    };
+    processPreScale(DigitActIdx::TrackpadNClick, true);
+    processPreScale(DigitActIdx::TrackpadSClick, false);
+
+    auto processAntiMoire = [&](DigitActIdx actIdx, bool larger) {
+        if (digitActionActives2[PathInteractHndIdx][actIdxToIdx(actIdx)] &&
+            digitActionStates2[PathInteractHndIdx][actIdxToIdx(actIdx)]) {
+            if (larger &&
+                sharedStates->antiMoireStepMult <=
+                    1.f - SharedStates::ANTI_MOIRE_STEP_MULT_CHNG_STEP) {
+                sharedStates->antiMoireStepMult +=
+                    SharedStates::ANTI_MOIRE_STEP_MULT_CHNG_STEP;
+                statefulSys->SetModified(
+                    std::tie(sharedStates->antiMoireStepMult));
+            } else if (!larger &&
+                       sharedStates->antiMoireStepMult >=
+                           .3f + SharedStates::ANTI_MOIRE_STEP_MULT_CHNG_STEP) {
+                sharedStates->antiMoireStepMult -=
+                    SharedStates::ANTI_MOIRE_STEP_MULT_CHNG_STEP;
+                statefulSys->SetModified(
+                    std::tie(sharedStates->antiMoireStepMult));
+            }
+        }
+    };
+    processAntiMoire(DigitActIdx::TrackpadEClick, true);
+    processAntiMoire(DigitActIdx::TrackpadWClick, false);
+}
+
 void kouek::VRApp::processInputToGUI() {
     if (sharedStates->guiPage == GUIPage::None)
-        return;
+        return; // when not drawing GUI, don't process inputs to GUI
 
     auto processGUIIntrctModePage = [&]() {
         auto f = [&](DigitActIdx actIdx, uint8_t callParam) {

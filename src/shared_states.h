@@ -63,7 +63,7 @@ struct GUIIntrctModePageStates {
             selectedIdx -= 1;
             selecteds[selectedIdx] = true;
         } else if (dir == 1 && selectedIdx < selecteds.size() - 1 &&
-            (selectedIdx / COL_NUM == (selectedIdx + 1) / COL_NUM)) {
+                   (selectedIdx / COL_NUM == (selectedIdx + 1) / COL_NUM)) {
             selecteds[selectedIdx] = false;
             selectedIdx += 1;
             selecteds[selectedIdx] = true;
@@ -85,12 +85,14 @@ struct GUIIntrctModePageStates {
 };
 
 struct SharedStates {
-    static constexpr float NEAR_CLIP = .1f, FAR_CLIP = 10.f;
-    static constexpr float MAX_SEARCH_MIN_SCALAR =
+    static constexpr auto NEAR_CLIP = .1f, FAR_CLIP = 10.f;
+    static constexpr auto MAX_SEARCH_MIN_SCALAR =
         30.f / 255.f + std::numeric_limits<float>::epsilon();
-    static constexpr float INTERACT_CUBE_HF_WID = .02f;
-    static constexpr float INTERACT_VERT_HF_WID = INTERACT_CUBE_HF_WID * .2f;
-    static constexpr float INTERACT_CUBE_CNTR_TO_HND_DIST = .05f;
+    static constexpr auto INTERACT_CUBE_HF_WID = .02f;
+    static constexpr auto INTERACT_VERT_HF_WID = INTERACT_CUBE_HF_WID * .2f;
+    static constexpr auto INTERACT_CUBE_CNTR_TO_HND_DIST = .05f;
+    static constexpr auto PRE_SCALE_CHNG_STEP = .001f;
+    static constexpr auto ANTI_MOIRE_STEP_MULT_CHNG_STEP = .01f;
     static constexpr glm::vec3 INTERACT_CUBE_COL{1.f, 1.f, 1.f};
     static constexpr glm::vec3 INTERACT_VERT_COL{1.f, .5f, 1.f};
     static constexpr glm::uvec3 MAX_SEARCH_SAMPLE_DIM{128, 128, 128};
@@ -106,16 +108,18 @@ struct SharedStates {
     uint32_t maxStepCnt = 1000;
     glm::uvec2 renderSz{1080, 1080};
 
-    float scaleW2V = .2f;
-    glm::vec3 translateW2V{22.2718792f * .2f, 36.81226598f * .2f,
+    float preScale = .2f;
+    float antiMoireStepMult = 0.6f;
+    glm::vec3 preTranslate{22.2718792f * .2f, 36.81226598f * .2f,
                            32.1920395f * .2f};
+    std::array<glm::vec3, 2> eyeToHeadTranslate2;
     std::array<glm::mat4, 2> projection2{
         glm::perspectiveFov(glm::radians(90.f), (float)renderSz.x,
-                            (float)renderSz.y, scaleW2V *NEAR_CLIP,
-                            scaleW2V *FAR_CLIP),
+                            (float)renderSz.y, preScale *NEAR_CLIP,
+                            preScale *FAR_CLIP),
         glm::perspectiveFov(glm::radians(90.f), (float)renderSz.x,
-                            (float)renderSz.y, scaleW2V *NEAR_CLIP,
-                            scaleW2V *FAR_CLIP)};
+                            (float)renderSz.y, preScale *NEAR_CLIP,
+                            preScale *FAR_CLIP)};
 
     DualEyeCamera camera;
     std::array<HandStates, 2> handStates2;
@@ -133,7 +137,8 @@ struct SharedStates {
             },
             std::tie(camera));
         statefulSys.SetModified(std::tie(FAVRLvl, maxStepCnt, renderSz,
-                                         scaleW2V, translateW2V, projection2));
+                                         preScale, preTranslate,
+                                         eyeToHeadTranslate2, projection2));
     }
 };
 

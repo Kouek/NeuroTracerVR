@@ -94,17 +94,18 @@ void CompVolVRRenderer::SetCameraParam(const CameraParam &param) {
     loadBlocks.clear();
     unloadBlocks.clear();
     {
-        auto cntrPos = .5f * (param.pos2[0] + param.pos2[1]) -
-                       (param.OBBHfSz.z + param.OBBBorderDistToEyeCntr) *
-                           param.rotation[2];
-        // according to CameraParam, find blocks needed
-        vs::OBB obb(cntrPos, param.rotation[0], param.rotation[1],
-                    param.rotation[2], param.OBBHfSz.x, param.OBBHfSz.y,
-                    param.OBBHfSz.z);
+        vs::Pyramid pyramid(
+            param.headPos,
+            param.headPos + param.rotation * camPyramidParam.pos4[2],
+            param.headPos + param.rotation * camPyramidParam.pos4[3],
+            param.headPos + param.rotation * camPyramidParam.pos4[0],
+            param.headPos + param.rotation * camPyramidParam.pos4[1]);
+        auto obb = pyramid.getOBB();
+        auto aabb = obb.getAABB();
+
         // AABB filter first
-        vs::AABB abb = obb.getAABB();
         for (auto &blockAABB : blockAABBs)
-            if (abb.intersect(blockAABB.second))
+            if (aabb.intersect(blockAABB.second))
                 currNeedBlocks.emplace(
                     std::array{blockAABB.first[0], blockAABB.first[1],
                                blockAABB.first[2], (uint32_t)0});
@@ -113,18 +114,21 @@ void CompVolVRRenderer::SetCameraParam(const CameraParam &param) {
             if (!obb.intersect_obb(
                     blockAABBs[std::array{(*itr)[0], (*itr)[1], (*itr)[2]}]
                         .convertToOBB()))
-                currNeedBlocks.erase(itr++);
+                itr = currNeedBlocks.erase(itr);
             else
                 ++itr;
     }
+
     // loadBlocks = currNeedBlocks - (old)needBlocks
     for (auto &e : currNeedBlocks)
         if (needBlocks.find(e) == needBlocks.end())
             loadBlocks.insert(e);
+
     // unloadBlocks = (old)needBlocks - currNeedBlocks
     for (auto &e : needBlocks)
         if (currNeedBlocks.find(e) == currNeedBlocks.end())
             unloadBlocks.insert(e);
+
     needBlocks = std::move(currNeedBlocks);
     if (loadBlocks.size() > 0 || unloadBlocks.size() > 0) {
         // loadBlocks = loadBlocks - cachedBlocks
@@ -253,6 +257,10 @@ void CompVolVRRenderer::SetVolume(std::shared_ptr<vs::CompVolume> volume,
                         std::array<uint32_t, 4>()));
 }
 
+void CompVolVRRenderer::SetCameraPyramidParam(const CamPyramidParam &param) {
+    camPyramidParam = param;
+}
+
 __device__ float virtualSampleLOD0(const glm::vec3 &samplePos) {
     // sample pos in Voxel Space -> virtual sample Block idx
     glm::uvec3 vsBlockIdx =
@@ -370,7 +378,9 @@ __device__ uchar4 rgbaFloatToUbyte4(glm::vec4 color) {
     return make_uchar4(color.r, color.g, color.b, color.a);
 }
 
-__global__ void renderKernel(cudaSurfaceObject_t d_outputSurfLft,
+__global__ void renderKernel(cudaTextureObject_t d_inputDepTexLft,
+                             cudaTextureObject_t d_inputDepTexRht,
+                             cudaSurfaceObject_t d_outputSurfLft,
                              cudaSurfaceObject_t d_outputSurfRht) {
     glm::uvec2 renderXY{blockIdx.x * blockDim.x + threadIdx.x,
                         blockIdx.y * blockDim.y + threadIdx.y};
@@ -387,21 +397,24 @@ __global__ void renderKernel(cudaSurfaceObject_t d_outputSurfLft,
                             1.f, 1.f};
         rayDrc = v4;
         rayDrc = glm::normalize(rayDrc);
+        auto absRayDrcZ = fabsf(rayDrc.z);
 
-        glm::vec3 obbCntr{0, 0,
-                          -dc_cameraParam.OBBHfSz.z -
-                              dc_cameraParam.OBBBorderDistToEyeCntr};
-        rayIntersectAABB(&t, &tExit, glm::zero<glm::vec3>(), rayDrc,
-                         obbCntr - dc_cameraParam.OBBHfSz,
-                         obbCntr + dc_cameraParam.OBBHfSz);
-        if (t < 0)
-            t = 0;
-        if (tExit < 0)
-            tExit = 0;
+        t = dc_projectionParam.nearClip / absRayDrcZ;
+        tExit = dc_projectionParam.farClip / absRayDrcZ;
+
+        uchar4 depth4 =
+            tex2D<uchar4>(blockIdx.z == 0 ? d_inputDepTexLft : d_inputDepTexRht,
+                          renderXY.x, renderXY.y);
+        float meshDep =
+            dc_projectionParam.projection223[blockDim.z == 0 ? 0 : 1] /
+            ((2.f * depth4.x / 255.f - 1.f) +
+             dc_projectionParam.projection222[blockDim.z == 0 ? 0 : 1]);
+        tExit = glm::min(tExit, meshDep / absRayDrcZ);
+
         rayDrc = dc_cameraParam.rotation * rayDrc;
     }
 
-    auto rayPos = dc_cameraParam.pos2[blockIdx.z] + t * rayDrc;
+    auto rayPos = dc_cameraParam.eyePos2[blockIdx.z] + t * rayDrc;
     auto rayDrcMultStep = dc_renderParam.step * rayDrc;
     auto lastSampleVal = 0.f;
     glm::vec4 color{0};
@@ -479,32 +492,27 @@ __global__ void subsampleKernel(cudaTextureObject_t d_inputDepTexLft,
         rayDrc = v4;
         rayDrc = glm::normalize(rayDrc);
 
-        glm::vec3 obbCntr{0, 0,
-                          -dc_cameraParam.OBBHfSz.z -
-                              dc_cameraParam.OBBBorderDistToEyeCntr};
-        rayIntersectAABB(&t, &tExit, glm::zero<glm::vec3>(), rayDrc,
-                         obbCntr - dc_cameraParam.OBBHfSz,
-                         obbCntr + dc_cameraParam.OBBHfSz);
-        if (t < 0)
-            t = 0;
-        if (tExit < 0)
-            tExit = 0;
+        auto absRayDrcZ = fabsf(rayDrc.z);
+        t = dc_projectionParam.nearClip / absRayDrcZ;
+        tExit = dc_projectionParam.farClip / absRayDrcZ;
+
         uchar4 depth4 =
             tex2D<uchar4>(blockIdx.z == 0 ? d_inputDepTexLft : d_inputDepTexRht,
                           subsamplePos.x, subsamplePos.y);
         float meshDep =
-            dc_projectionParam.projection23[blockDim.z == 0 ? 0 : 1] /
+            dc_projectionParam.projection223[blockDim.z == 0 ? 0 : 1] /
             ((2.f * depth4.x / 255.f - 1.f) +
-             dc_projectionParam.projection22[blockDim.z == 0 ? 0 : 1]);
-        tExit = glm::min(tExit, meshDep / fabsf(rayDrc.z));
+             dc_projectionParam.projection222[blockDim.z == 0 ? 0 : 1]);
+        tExit = glm::min(tExit, meshDep / absRayDrcZ);
 
         rayDrc = dc_cameraParam.rotation * rayDrc;
     }
 
     auto hazeStartSetpCnt =
-        dc_renderParam.maxStepCnt * .8f; // step beyond this will be hazed
+        dc_renderParam.maxStepCnt *
+        CompVolVRRenderer::UNHAZED_RATIO; // step beyond this will be hazed
     auto hazeDltSetpCnt = dc_renderParam.maxStepCnt - hazeStartSetpCnt;
-    auto rayPos = dc_cameraParam.pos2[blockIdx.z] + t * rayDrc;
+    auto rayPos = dc_cameraParam.eyePos2[blockIdx.z] + t * rayDrc;
     auto rayDrcMultStep = dc_renderParam.step * rayDrc;
     auto lastSampleVal = 0.f;
     glm::vec4 color{0};
@@ -567,6 +575,54 @@ __global__ void reconsKernel(cudaSurfaceObject_t d_outputSurfLft,
     uchar4 subsampleColor;
     surf2Dread(&subsampleColor, dc_subsampleSurf2[blockIdx.z],
                subsampleTexPos.x * 4, subsampleTexPos.y);
+
+    glm::vec4 color;
+    color.r = (float)subsampleColor.x;
+    color.g = (float)subsampleColor.y;
+    color.b = (float)subsampleColor.z;
+    color.a = (float)subsampleColor.w;
+    for (uint8_t i = 0; i < 4; ++i) {
+        glm::uvec2 neighborRenderXY;
+        switch (i) {
+        case 0:
+            neighborRenderXY.x = renderXY.x == 0 ? renderXY.x : renderXY.x - 1;
+            break;
+        case 1:
+            neighborRenderXY.x = renderXY.x == dc_renderParam.renderSz.x - 1
+                                     ? renderXY.x
+                                     : renderXY.x + 1;
+            break;
+        default:
+            neighborRenderXY.x = renderXY.x;
+        }
+        switch (i) {
+        case 2:
+            neighborRenderXY.y = renderXY.y == 0 ? renderXY.y : renderXY.y - 1;
+            break;
+        case 3:
+            neighborRenderXY.y = renderXY.y == dc_renderParam.renderSz.y - 1
+                                     ? renderXY.y
+                                     : renderXY.y + 1;
+            break;
+        default:
+            neighborRenderXY.y = renderXY.y;
+        }
+        auto neighborSubsamplePos =
+            tex2D<uint2>(dc_reconsLookupTexes[dc_renderParam.FAVRLvl - 1],
+                         neighborRenderXY.x, neighborRenderXY.y);
+        uchar4 neighborSubsampleColor;
+        surf2Dread(&neighborSubsampleColor, dc_subsampleSurf2[blockIdx.z],
+                   neighborSubsamplePos.x * 4, neighborSubsamplePos.y);
+        color.r += (float)neighborSubsampleColor.x;
+        color.g += (float)neighborSubsampleColor.y;
+        color.b += (float)neighborSubsampleColor.z;
+        color.a += (float)neighborSubsampleColor.w;
+    }
+    color *= .2f; // avg color
+    subsampleColor.x = (uint8_t)color.r;
+    subsampleColor.y = (uint8_t)color.g;
+    subsampleColor.z = (uint8_t)color.b;
+    subsampleColor.w = (uint8_t)color.a;
 
     if (blockIdx.z == 0)
         surf2Dwrite(subsampleColor, d_outputSurfLft, renderXY.x * 4,
@@ -636,7 +692,7 @@ __global__ void testReconsKernel(cudaSurfaceObject_t d_outputSurfLft,
                     renderXY.y);
 }
 
-void kouek::CompVolVRRenderer::render(RenderTarget renderTarget) {
+void CompVolVRRenderer::render(RenderTarget renderTarget) {
     cudaSurfaceObject_t outputSurf2[2];
     cudaTextureObject_t inputDepTex2[2];
 
@@ -663,7 +719,7 @@ void kouek::CompVolVRRenderer::render(RenderTarget renderTarget) {
             (renderSz.x + threadPerBlock.x - 1) / threadPerBlock.x,
             (renderSz.y + threadPerBlock.y - 1) / threadPerBlock.y, 2};
         renderKernel<<<blockPerGrid, threadPerBlock, 0, renderStream>>>(
-            outputSurf2[0], outputSurf2[1]);
+            inputDepTex2[0], inputDepTex2[1], outputSurf2[0], outputSurf2[1]);
     } break;
     case RenderTarget::FAVRVol: {
         dim3 threadPerBlock{16, 16};

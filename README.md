@@ -4,8 +4,8 @@
 
 ## Space
 
-- Word Space --- * preScale -- + preTranslate -->
-- Render Space --- / sapces -->
+- Word Space --- ( * preScale ) -- ( + preTranslate ) -->
+- Volume Render Space --- ( / sapces ) -->
 - Volume Space
 
 ## FAVR (Focus Adaptive Volume Rendering)

@@ -11,9 +11,12 @@ namespace kouek {
 
 static constexpr auto NONE_POS_VAL = std::numeric_limits<float>::quiet_NaN();
 
-void prepareMaxVoxPos(const glm::uvec3 &sampleBoxSzVSp, float minScalar);
-void execMaxVoxPos(const glm::vec3 &minVSp, const glm::vec3 &maxVSp);
+// <<
+// In this scope, VRSp refers to Volume Render Space
+void prepareMaxVoxPos(const glm::uvec3 &sampleBoxSzVRSp, float minScalar);
+void execMaxVoxPos(const glm::vec3 &minVRSp, const glm::vec3 &maxVRSp);
 std::tuple<bool, glm::vec3> fetchMaxVoxPos();
+// >>
 
 void waitForAllVoxAlgorithms();
 

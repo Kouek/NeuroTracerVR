@@ -27,12 +27,19 @@ class CompVolVRRenderer : public VRRenderer {
         glm::vec3 spaces;
     };
 
+    struct CamPyramidParam {
+        // 0 for LD, 1 for RD, 2 for LU, 3 for RU
+        std::array<glm::vec3, 4> pos4;
+    };
+
   public:
     static constexpr auto MAX_LOD = 6;
     static constexpr auto MAX_TEX_UNIT_NUM = 10;
+    static constexpr auto UNHAZED_RATIO = .9f;
 
   private:
     RendererParam rendererParam;
+    CamPyramidParam camPyramidParam;
 
     std::unique_ptr<vs::CUDAVolumeBlockCache> blockCache;
     std::shared_ptr<vs::CompVolume> volume;
@@ -56,6 +63,7 @@ class CompVolVRRenderer : public VRRenderer {
 
     void SetVolume(std::shared_ptr<vs::CompVolume> volume,
                    const glm::vec3 &spaces);
+    void SetCameraPyramidParam(const CamPyramidParam &param);
 
   private:
     void render(RenderTarget renderTarget);

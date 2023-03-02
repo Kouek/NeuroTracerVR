@@ -81,6 +81,7 @@ class VRApp {
 
   private:
     void initSignalAndSlots();
+    void processInputToRender();
     void processInputToGUI();
 };
 } // namespace kouek

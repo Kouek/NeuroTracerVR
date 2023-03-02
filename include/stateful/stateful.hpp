@@ -183,12 +183,13 @@ class StatefulSystem {
             printf("and %llu functions are left\n", unsortedFuncs.size());
         }
         size_t noDstFuncNum = 0;
-        for (auto &funcNode : unsortedFuncs)
-            if (funcNode.sortedSrcNum == 0 && funcNode.sortedDstNum == 0) {
-                sortedFuncs.emplace_back(std::move(funcNode));
-                unsortedFuncs.pop_back();
+        for (auto itr = unsortedFuncs.begin(); itr != unsortedFuncs.end();)
+            if (itr->sortedSrcNum == 0 && itr->sortedDstNum == 0) {
                 ++noDstFuncNum;
-            }
+                sortedFuncs.emplace_back(std::move(*itr));
+                itr = unsortedFuncs.erase(itr);
+            } else
+                ++itr;
         printf("Analyse %llu functions without dst variables\n", noDstFuncNum);
 
         printf("...Stateful System ends analysis\n");
