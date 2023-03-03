@@ -60,11 +60,18 @@ static std::array<GLuint, 2> rndrDepFBO2;
 static std::array<GLuint, 2> volRenderTex;
 
 // Objects except for volume and hand model
-static GLuint cubeVAO, cubeVBO, cubeEBO;
-static std::unique_ptr<Shader> cubeShader, cubeDepShader;
-static GLint cubeShdrMatPos, cubeDepShdrMatPos;
+static GLuint volCubeVAO, volCubeVBO, volCubeEBO;
+static glm::vec3 hfVolSz;
+static glm::mat4 volCubeM;
+
+static GLuint intrctCubeVAO, intrctCubeVBO, intrctCubeEBO;
 
 static GLuint quadVAO, quadVBO, quadEBO;
+
+static std::unique_ptr<Shader> positionShader;
+static GLint posShdrMPos, posShdrMatPos, posShdrMaxPosPos;
+static std::unique_ptr<Shader> colorShader, colorDepShader;
+static GLint colShdrMatPos, colShdrColPos, colDepShdrMatPos;
 static std::unique_ptr<Shader> quadShader, diffuseShader, diffuseDepShader;
 static GLint dfShdrMatPos, dfDepShdrMatPos;
 
@@ -94,26 +101,32 @@ static void initRender() {
     if (sharedStates->canVRRun)
         vrApp->SetSubmitTex2(submitEyeTex2);
 
-    std::tie(cubeVAO, cubeVBO, cubeEBO) =
-        createCube(SharedStates::INTERACT_CUBE_HF_WID);
+    std::tie(intrctCubeVAO, intrctCubeVBO, intrctCubeEBO) =
+        createCubeFrame(SharedStates::INTERACT_CUBE_HF_WID);
 
-    cubeShader = std::make_unique<Shader>(
+    positionShader = std::make_unique<Shader>(
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/pos.vs").c_str(),
+        (std::string(PROJECT_SOURCE_DIR) + "/src/shader/pos.fs").c_str());
+    posShdrMPos = glGetUniformLocation(positionShader->ID, "M");
+    assert(posShdrMPos != -1);
+    posShdrMatPos = glGetUniformLocation(positionShader->ID, "matrix");
+    assert(posShdrMatPos != -1);
+    posShdrMaxPosPos = glGetUniformLocation(positionShader->ID, "maxPos");
+    assert(posShdrMaxPosPos != -1);
+
+    colorShader = std::make_unique<Shader>(
         (std::string(PROJECT_SOURCE_DIR) + "/src/shader/color.vs").c_str(),
         (std::string(PROJECT_SOURCE_DIR) + "/src/shader/color.fs").c_str());
-    cubeShdrMatPos = glGetUniformLocation(cubeShader->ID, "matrix");
-    assert(cubeShdrMatPos != -1);
-    {
-        auto cubeShdrColPos = glGetUniformLocation(cubeShader->ID, "color");
-        assert(cubeShdrColPos != -1);
-        cubeShader->use();
-        glUniform3fv(cubeShdrColPos, 1, &SharedStates::INTERACT_CUBE_COL[0]);
-    }
+    colShdrMatPos = glGetUniformLocation(colorShader->ID, "matrix");
+    assert(colShdrMatPos != -1);
+    colShdrColPos = glGetUniformLocation(colorShader->ID, "color");
+    assert(colShdrColPos != -1);
 
-    cubeDepShader = std::make_unique<Shader>(
+    colorDepShader = std::make_unique<Shader>(
         (std::string(PROJECT_SOURCE_DIR) + "/src/shader/color.vs").c_str(),
         (std::string(PROJECT_SOURCE_DIR) + "/src/shader/dep.fs").c_str());
-    cubeDepShdrMatPos = glGetUniformLocation(cubeDepShader->ID, "matrix");
-    assert(cubeDepShdrMatPos != -1);
+    colDepShdrMatPos = glGetUniformLocation(colorDepShader->ID, "matrix");
+    assert(colDepShdrMatPos != -1);
 
     std::tie(quadVAO, quadVBO, quadEBO) = createQuad();
 
@@ -167,6 +180,16 @@ static void initRender() {
             auto blockLenInfo = volume->GetBlockLength();
             blockLength = blockLenInfo[0];
             noPaddingBlockLength = blockLenInfo[0] - 2 * blockLenInfo[1];
+
+            auto blockDimInfo = volume->GetBlockDim();
+            glm::vec3 LOD0BlockDim = {blockDimInfo[0][0], blockDimInfo[0][1],
+                                      blockDimInfo[0][2]};
+            auto volSz = (float)noPaddingBlockLength * spaces * LOD0BlockDim;
+            hfVolSz = .5f * volSz;
+
+            std::tie(volCubeVAO, volCubeVBO, volCubeEBO) = createCube(hfVolSz);
+            positionShader->use();
+            glUniform3fv(posShdrMaxPosPos, 1, &volSz[0]);
         }
         static_cast<CompVolVRRenderer *>(renderer.get())
             ->SetVolume(volume, spaces);
@@ -186,10 +209,6 @@ static void initRender() {
 }
 
 static void initSignalAndSlots() {
-    statefulSys->Register(std::tie(sharedStates->preScale), [&]() {
-        spdlog::info("App info: max step count is set to {0}",
-                     sharedStates->preScale);
-    });
     statefulSys->Register(
         std::tie(sharedStates->FAVRLvl, sharedStates->maxStepCnt,
                  sharedStates->antiMoireStepMult),
@@ -256,6 +275,9 @@ static void initSignalAndSlots() {
                           [&]() { renderer->SetProjectionParam(projParam); });
     statefulSys->Register(std::tie(sharedStates->preScale), [&]() {
         pathRenderer->szScale = sharedStates->preScale;
+        sharedStates->preTranslateChngStep =
+            sharedStates->preScale * std::max({spaces.x, spaces.y, spaces.z}) *
+            noPaddingBlockLength;
     });
     statefulSys->Register(
         std::tie(sharedStates->preScale, sharedStates->preTranslate), [&]() {
@@ -271,6 +293,12 @@ static void initSignalAndSlots() {
                              -invPreScale * sharedStates->preTranslate.x,
                              -invPreScale * sharedStates->preTranslate.y,
                              -invPreScale * sharedStates->preTranslate.z, 1.f);
+            volCubeM = glm::mat4(
+                invPreScale, 0.f, 0.f, 0.f, 0.f, invPreScale, 0.f, 0.f, 0.f,
+                0.f, invPreScale, 0.f,
+                invPreScale * (hfVolSz.x - sharedStates->preTranslate.x),
+                invPreScale * (hfVolSz.y - sharedStates->preTranslate.y),
+                invPreScale * (hfVolSz.z - sharedStates->preTranslate.z), 1.f);
         });
     statefulSys->Register(
         std::tie(sharedStates->preScale, sharedStates->preTranslate,
@@ -328,6 +356,39 @@ static void initSignalAndSlots() {
             }
         });
     statefulSys->Register(
+        std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].pressed),
+        [&]() {
+            if (sharedStates->guiPage != GUIPage::None)
+                return;
+
+            switch (sharedStates->interactiveMode) {
+            case InteractionMode::SelectVert:
+                break;
+            case InteractionMode::AddVert:
+                if (isInteractingPosFound()) {
+                    if (pathRenderer->GetSelectedSubPathID() ==
+                        GLPathRenderer::NONE)
+                        return;
+                    auto lastID = pathRenderer->GetSelectedVertID();
+                    if (lastID == GLPathRenderer::NONE)
+                        return;
+
+                    auto pos =
+                        glm::vec3{W2VR * glm::vec4{refInteractingPos(), 1.f}};
+                    auto lastPos = pathRenderer->GetVertexPositions()[lastID];
+                    if (glm::distance(pos, lastPos) <
+                        sharedStates->preScale *
+                            SharedStates::CONSECUTIVE_PATH_VERTS_MIN_DIST)
+                        return;
+
+                    auto id = pathRenderer->AddVertex(pos);
+
+                    pathRenderer->StartVertex(id);
+                }
+                break;
+            }
+        });
+    statefulSys->Register(
         std::tie(sharedStates->guiIntrctModePageStates.selectedIdx), [&]() {
             sharedStates->interactiveMode = static_cast<InteractionMode>(
                 sharedStates->guiIntrctModePageStates.selectedIdx);
@@ -352,24 +413,28 @@ static void render() {
         VP2[eyeIdx] = sharedStates->projection2[eyeIdx] *
                       sharedStates->camera.GetViewMat(eyeIdx);
 
-    glm::mat4 interactingCubeM = glm::identity<glm::mat4>();
-    interactingCubeM[3] = {
-        interactingCubeCntrPos =
-            glm::vec3{
-                sharedStates->handStates2[VRApp::PathInteractHndIdx].pose[3]} -
-            SharedStates::INTERACT_CUBE_CNTR_TO_HND_DIST *
+    glm::mat4 intrctCubeM = glm::identity<glm::mat4>();
+    if (sharedStates->handStates2[VRApp::PathInteractHndIdx].show)
+        intrctCubeM[3] = {
+            interactingCubeCntrPos =
                 glm::vec3{sharedStates->handStates2[VRApp::PathInteractHndIdx]
-                              .pose[2]},
-        1.f};
-    std::array<glm::mat4, 2> interactingCubeMVP2;
-    for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
-        interactingCubeMVP2[eyeIdx] = VP2[eyeIdx] * interactingCubeM;
+                              .pose[3]} -
+                SharedStates::INTERACT_CUBE_CNTR_TO_HND_DIST *
+                    glm::vec3{
+                        sharedStates->handStates2[VRApp::PathInteractHndIdx]
+                            .pose[2]},
+            1.f};
 
+    std::array<glm::mat4, 2> volCubeMVP2;
+    std::array<glm::mat4, 2> intrctCubeMVP2;
     std::array<std::array<glm::mat4, 2>, 2> hndMVP2x2;
-    for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx)
+    for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
+        volCubeMVP2[eyeIdx] = VP2[eyeIdx] * volCubeM;
+        intrctCubeMVP2[eyeIdx] = VP2[eyeIdx] * intrctCubeM;
         for (uint8_t hndIdx = 0; hndIdx < 2; ++hndIdx)
             hndMVP2x2[eyeIdx][hndIdx] =
                 VP2[eyeIdx] * sharedStates->handStates2[hndIdx].pose;
+    }
 
     auto shouldCalcInteractingPos = [&]() {
         return (sharedStates->interactiveMode == InteractionMode::AddPath ||
@@ -424,16 +489,34 @@ static void render() {
 
         if (sharedStates->handStates2[VRApp::PathInteractHndIdx].show) {
             if (renderDep)
-                cubeDepShader->use();
-            else
-                cubeShader->use();
-            glUniformMatrix4fv(renderDep ? cubeDepShdrMatPos : cubeShdrMatPos,
-                               1, GL_FALSE,
-                               (GLfloat *)&interactingCubeMVP2[eyeIdx]);
-            glBindVertexArray(cubeVAO);
+                colorDepShader->use();
+            else {
+                colorShader->use();
+                glUniform3fv(colShdrColPos, 1,
+                             &SharedStates::INTERACT_CUBE_COL[0]);
+            }
+            glUniformMatrix4fv(renderDep ? colDepShdrMatPos : colShdrMatPos, 1,
+                               GL_FALSE, (GLfloat *)&intrctCubeMVP2[eyeIdx]);
+            glBindVertexArray(intrctCubeVAO);
             glDrawElements(GL_LINES, 24, GL_UNSIGNED_SHORT, (const void *)0);
             glBindVertexArray(0);
         }
+    };
+
+    auto renderVolCube = [&](uint8_t eyeIdx, bool renderDep) {
+        GL_CHECK;
+        if (renderDep)
+            colorDepShader->use();
+        else {
+            positionShader->use();
+            glUniformMatrix4fv(posShdrMPos, 1, GL_FALSE, (GLfloat *)&volCubeM);
+        }
+        glUniformMatrix4fv(renderDep ? colDepShdrMatPos : posShdrMatPos, 1,
+                           GL_FALSE, (GLfloat *)&volCubeMVP2[eyeIdx]);
+        glBindVertexArray(volCubeVAO);
+        glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, (const void *)0);
+        glBindVertexArray(0);
+        GL_CHECK;
     };
 
     auto getGUIRenderEyeIdx = [&]() -> uint8_t {
@@ -445,7 +528,6 @@ static void render() {
 
     glEnable(GL_MULTISAMPLE);
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
 
     // Pixels without fragments are set to FarClip
@@ -455,12 +537,15 @@ static void render() {
         glViewport(0, 0, sharedStates->renderSz.x, sharedStates->renderSz.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        glEnable(GL_CULL_FACE);
         if (shouldShowInteractingPos())
             pathRenderer->DrawExtraVertexDepth(
                 SharedStates::INTERACT_VERT_HF_WID, VP2[eyeIdx]);
         pathRenderer->DrawDepth(VR2W, VP2[eyeIdx]);
-
         renderHands(eyeIdx, true);
+
+        glDisable(GL_CULL_FACE);
+        renderVolCube(eyeIdx, true);
     }
 
     renderer->Render(sharedStates->renderTarget);
@@ -472,17 +557,19 @@ static void render() {
         glViewport(0, 0, sharedStates->renderSz.x, sharedStates->renderSz.y);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        glEnable(GL_CULL_FACE);
         if (shouldShowInteractingPos())
             pathRenderer->DrawExtraVertex(SharedStates::INTERACT_VERT_HF_WID,
                                           VP2[eyeIdx],
                                           SharedStates::INTERACT_VERT_COL);
         pathRenderer->Draw(VR2W, VP2[eyeIdx]);
-
         renderHands(eyeIdx, false);
+
+        glDisable(GL_CULL_FACE);
+        renderVolCube(eyeIdx, false);
     }
 
     glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -514,7 +601,7 @@ static void render() {
 
 int main(int argc, char **argv) {
     statefulSys = std::make_shared<StatefulSystem>();
-    sharedStates = std::make_shared<SharedStates>(*statefulSys.get());
+    sharedStates = std::make_shared<SharedStates>();
 
     glfwApp = std::make_unique<GLFWApp>(sharedStates, statefulSys);
     if (!sharedStates->canRun) {

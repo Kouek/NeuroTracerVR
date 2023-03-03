@@ -11,7 +11,7 @@
 namespace kouek {
 class VRApp {
   public:
-    static constexpr uint8_t PathInteractHndIdx = 1;
+    static constexpr uint8_t PathInteractHndIdx = 0;
     static constexpr uint8_t VolInteractHndIdx = 1;
 
   private:

@@ -35,7 +35,7 @@ class CompVolVRRenderer : public VRRenderer {
   public:
     static constexpr auto MAX_LOD = 6;
     static constexpr auto MAX_TEX_UNIT_NUM = 10;
-    static constexpr auto UNHAZED_RATIO = .9f;
+    static constexpr auto UNHAZED_RATIO = .8f;
 
   private:
     RendererParam rendererParam;

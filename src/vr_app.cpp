@@ -178,6 +178,25 @@ void kouek::VRApp::ProcessInput() {
             }
     }
 
+    for (uint8_t hndIdx = 0; hndIdx < 2; ++hndIdx) {
+        if (digitActionActives2[hndIdx]
+                               [actIdxToIdx(DigitActIdx::TriggerClick)] &&
+            digitActionChangeds2[hndIdx]
+                                [actIdxToIdx(DigitActIdx::TriggerClick)] &&
+            digitActionStates2[hndIdx]
+                              [actIdxToIdx(DigitActIdx::TriggerClick)]) {
+            statefulSys->SetModified(
+                std::tie(sharedStates->handStates2[hndIdx].clicked));
+        }
+        if (analogActionActives2[hndIdx]
+                                [actIdxToIdx(DigitActIdx::TriggerClick)] &&
+            analogActionDeltas2[hndIdx][actIdxToIdx(DigitActIdx::TriggerClick)]
+                    .x != 0.f) {
+            statefulSys->SetModified(
+                std::tie(sharedStates->handStates2[hndIdx].pressed));
+        }
+    }
+
     processInputToRender();
     processInputToGUI();
 }
@@ -249,42 +268,66 @@ void kouek::VRApp::initSignalAndSlots() {
                    digitActionChangeds2[PathInteractHndIdx]
                                        [actIdxToIdx(DigitActIdx::Menu)];
         });
-
-    // trigger -> some interacting actions
-    statefulSys->Register(
-        [&]() { sharedStates->handStates2[PathInteractHndIdx].clicked = true; },
-        std::tie(sharedStates->handStates2[PathInteractHndIdx].clicked),
-        [&]() {
-            return digitActionActives2[PathInteractHndIdx][actIdxToIdx(
-                       DigitActIdx::TriggerClick)] &&
-                   !digitActionStates2[PathInteractHndIdx][actIdxToIdx(
-                       DigitActIdx::TriggerClick)] &&
-                   digitActionChangeds2[PathInteractHndIdx]
-                                       [actIdxToIdx(DigitActIdx::TriggerClick)];
-        });
-    statefulSys->Register(
-        [&]() { sharedStates->handStates2[PathInteractHndIdx].pressed = true; },
-        std::tie(sharedStates->handStates2[PathInteractHndIdx].pressed),
-        [&]() {
-            return analogActionActives2[PathInteractHndIdx][actIdxToIdx(
-                       AnalogActIdx::TriggerPull)] &&
-                   analogActionDeltas2[PathInteractHndIdx]
-                                      [actIdxToIdx(AnalogActIdx::TriggerPull)]
-                                          .z > 0.f;
-        });
-
-    // Empty func registering
-    statefulSys->SetModified(
-        std::tie(sharedStates->guiIntrctModePageStates.selectedIdx));
 }
 
 void kouek::VRApp::processInputToRender() {
     if (sharedStates->guiPage != GUIPage::None)
         return; // when drawing GUI, don't process inputs to affect rendering
 
+    auto processPreTranslate = [&]() {
+        static constexpr auto DELTA_MULT = 10.f;
+        static bool lastPressed = false, lastClicked = false;
+        static glm::vec3 lastPressedPreTtanslate, lastPressedPos, clickedDelta;
+
+        // A tigger will always enter Pressed state before Clicked,
+        // and exit Clicked state before Pressed state.
+        // Thus we check the states as below.
+        if (digitActionActives2[VolInteractHndIdx]
+                               [actIdxToIdx(DigitActIdx::TriggerClick)] &&
+            digitActionStates2[VolInteractHndIdx]
+                              [actIdxToIdx(DigitActIdx::TriggerClick)]) {
+            if (!lastClicked) {
+                clickedDelta =
+                    glm::vec3{
+                        sharedStates->handStates2[VolInteractHndIdx].pose[3]} -
+                    lastPressedPos;
+                lastClicked = true;
+            }
+            lastPressedPreTtanslate = sharedStates->preTranslate +=
+                sharedStates->preTranslateChngStep * clickedDelta;
+            statefulSys->SetModified(std::tie(sharedStates->preTranslate));
+            return;
+        }
+
+        lastClicked = false;
+        if (analogActionActives2[VolInteractHndIdx]
+                                [actIdxToIdx(AnalogActIdx::TriggerPull)] &&
+            analogActionDeltas2[VolInteractHndIdx]
+                               [actIdxToIdx(AnalogActIdx::TriggerPull)]
+                                   .x != 0.f) {
+            if (!lastPressed) {
+                lastPressedPreTtanslate = sharedStates->preTranslate;
+                lastPressedPos =
+                    sharedStates->handStates2[VolInteractHndIdx].pose[3];
+                lastPressed = true;
+            }
+
+            auto delta =
+                glm::vec3{
+                    sharedStates->handStates2[VolInteractHndIdx].pose[3]} -
+                lastPressedPos;
+            sharedStates->preTranslate =
+                lastPressedPreTtanslate +
+                sharedStates->preTranslateChngStep * delta * DELTA_MULT;
+            statefulSys->SetModified(std::tie(sharedStates->preTranslate));
+        } else
+            lastPressed = false;
+    };
+    processPreTranslate();
+
     auto processPreScale = [&](DigitActIdx actIdx, bool larger) {
-        if (digitActionActives2[PathInteractHndIdx][actIdxToIdx(actIdx)] &&
-            digitActionStates2[PathInteractHndIdx][actIdxToIdx(actIdx)]) {
+        if (digitActionActives2[VolInteractHndIdx][actIdxToIdx(actIdx)] &&
+            digitActionStates2[VolInteractHndIdx][actIdxToIdx(actIdx)]) {
             sharedStates->preScale += larger
                                           ? SharedStates::PRE_SCALE_CHNG_STEP
                                           : -SharedStates::PRE_SCALE_CHNG_STEP;
@@ -295,8 +338,8 @@ void kouek::VRApp::processInputToRender() {
     processPreScale(DigitActIdx::TrackpadSClick, false);
 
     auto processAntiMoire = [&](DigitActIdx actIdx, bool larger) {
-        if (digitActionActives2[PathInteractHndIdx][actIdxToIdx(actIdx)] &&
-            digitActionStates2[PathInteractHndIdx][actIdxToIdx(actIdx)]) {
+        if (digitActionActives2[VolInteractHndIdx][actIdxToIdx(actIdx)] &&
+            digitActionStates2[VolInteractHndIdx][actIdxToIdx(actIdx)]) {
             if (larger &&
                 sharedStates->antiMoireStepMult <=
                     1.f - SharedStates::ANTI_MOIRE_STEP_MULT_CHNG_STEP) {

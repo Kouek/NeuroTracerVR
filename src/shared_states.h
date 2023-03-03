@@ -93,6 +93,8 @@ struct SharedStates {
     static constexpr auto INTERACT_CUBE_CNTR_TO_HND_DIST = .05f;
     static constexpr auto PRE_SCALE_CHNG_STEP = .001f;
     static constexpr auto ANTI_MOIRE_STEP_MULT_CHNG_STEP = .01f;
+    static constexpr auto CONSECUTIVE_PATH_VERTS_MIN_DIST =
+        2.f * INTERACT_CUBE_HF_WID;
     static constexpr glm::vec3 INTERACT_CUBE_COL{1.f, 1.f, 1.f};
     static constexpr glm::vec3 INTERACT_VERT_COL{1.f, .5f, 1.f};
     static constexpr glm::uvec3 MAX_SEARCH_SAMPLE_DIM{128, 128, 128};
@@ -109,6 +111,7 @@ struct SharedStates {
     glm::uvec2 renderSz{1080, 1080};
 
     float preScale = .2f;
+    float preTranslateChngStep;
     float antiMoireStepMult = 0.6f;
     glm::vec3 preTranslate{22.2718792f * .2f, 36.81226598f * .2f,
                            32.1920395f * .2f};
@@ -125,20 +128,13 @@ struct SharedStates {
     std::array<HandStates, 2> handStates2;
     GUIIntrctModePageStates guiIntrctModePageStates;
 
-    SharedStates(StatefulSystem &statefulSys) {
-        statefulSys.RegisterExecOnce(
-            [&]() {
-                camera.SetEyeToHead(glm::zero<glm::vec3>(),
-                                    glm::zero<glm::vec3>());
-                camera.SetHeadPos(glm::zero<glm::vec3>());
-                camera.SetSelfRotation(glm::mat3{
-                    glm::lookAt(glm::vec3{.5f, .5f, .5f},
-                                glm::vec3{.5f, .5f, 0}, glm::vec3{0, 1.f, 0})});
-            },
-            std::tie(camera));
-        statefulSys.SetModified(std::tie(FAVRLvl, maxStepCnt, renderSz,
-                                         preScale, preTranslate,
-                                         eyeToHeadTranslate2, projection2));
+    SharedStates() {
+        // default values without VR HMD
+        camera.SetEyeToHead(glm::zero<glm::vec3>(), glm::zero<glm::vec3>());
+        camera.SetHeadPos(glm::zero<glm::vec3>());
+        camera.SetSelfRotation(glm::mat3{glm::lookAt(glm::vec3{.5f, .5f, .5f},
+                                                     glm::vec3{.5f, .5f, 0},
+                                                     glm::vec3{0, 1.f, 0})});
     }
 };
 

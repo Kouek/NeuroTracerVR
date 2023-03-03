@@ -12,6 +12,7 @@
 namespace kouek {
 class StatefulSystem {
   private:
+    bool firstAnalyse = true;
     std::vector<bool> modifieds;
     std::unordered_map<const void *, size_t> addrToIndices;
 
@@ -194,6 +195,11 @@ class StatefulSystem {
 
         printf("...Stateful System ends analysis\n");
         assert(unsortedFuncs.empty());
+
+        if (firstAnalyse) {
+            std::fill(modifieds.begin(), modifieds.end(), true);
+            firstAnalyse = false;
+        }
     }
 
   public:
