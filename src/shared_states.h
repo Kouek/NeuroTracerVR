@@ -29,15 +29,15 @@ enum class InteractionMode {
     JoinPath,
     End
 };
-enum class GUIPage { None = 0, IntrctModePage, End };
+enum class GUIPage { None = 0, IntrctModePage, SpaceInfoPage, End };
 
 // Selectable Widget in ImGui doesn't support text wrapping currently.
 // Thus we use a \n to keep texts in the view scope.
 static inline constexpr std::array InteractionModeNames{
     "Select\nVertex", "Add\nPath",      "Add\nVertex",
     "Move\nVertex",   "Delete\nVertex", "Join\nPath"};
-static inline constexpr std::array GUIPageNames{"None",
-                                                "Select Interaction Mode"};
+static inline constexpr std::array GUIPageNames{
+    "None", "Select Interaction Mode", "Space Info"};
 
 struct GUIIntrctModePageStates {
     static constexpr uint8_t ROW_NUM = 3;
@@ -109,10 +109,12 @@ struct SharedStates {
     uint8_t FAVRLvl = 4;
     uint32_t maxStepCnt = 1000;
     glm::uvec2 renderSz{1080, 1080};
+    glm::uvec3 blkDim;
+    glm::uvec3 camInBlk;
 
     float preScale = .2f;
     float preTranslateChngStep;
-    float antiMoireStepMult = 0.6f;
+    float antiMoireStepMult = 0.8f;
     glm::vec3 preTranslate{22.2718792f * .2f, 36.81226598f * .2f,
                            32.1920395f * .2f};
     std::array<glm::vec3, 2> eyeToHeadTranslate2;
@@ -135,6 +137,25 @@ struct SharedStates {
         camera.SetSelfRotation(glm::mat3{glm::lookAt(glm::vec3{.5f, .5f, .5f},
                                                      glm::vec3{.5f, .5f, 0},
                                                      glm::vec3{0, 1.f, 0})});
+    }
+
+    inline uint8_t GetGUIRenderEyeIdx() const {
+        switch (guiPage) {
+        case GUIPage::IntrctModePage:
+            return 1;
+        default:
+            return 0;
+        }
+    }
+
+    inline bool IsGUIBlockInteraction() const {
+        switch (guiPage) {
+        case GUIPage::None:
+        case GUIPage::SpaceInfoPage:
+            return false;
+        default:
+            return true;
+        }
     }
 };
 

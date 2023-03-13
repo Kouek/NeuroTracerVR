@@ -93,7 +93,7 @@ void CompVolVRRenderer::SetCameraParam(const CameraParam &param) {
 
     loadBlocks.clear();
     unloadBlocks.clear();
-    {
+    try {
         vs::Pyramid pyramid(
             param.headPos,
             param.headPos + param.rotation * camPyramidParam.pos4[2],
@@ -117,6 +117,8 @@ void CompVolVRRenderer::SetCameraParam(const CameraParam &param) {
                 itr = currNeedBlocks.erase(itr);
             else
                 ++itr;
+    } catch (std::exception &ex) {
+        spdlog::error("Renderer Info: {0}", ex.what());
     }
 
     // loadBlocks = currNeedBlocks - (old)needBlocks

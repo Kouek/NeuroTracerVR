@@ -143,6 +143,7 @@ void kouek::GLFWApp::RenderGUI() {
         tmp.y -= min.y;
         return std::min(tmp.x, tmp.y);
     }();
+
     auto drawIntrctModePage = [&]() {
         ImVec2 btnSz{contentSz / GUIIntrctModePageStates::COL_NUM,
                      contentSz / GUIIntrctModePageStates::ROW_NUM};
@@ -165,9 +166,58 @@ void kouek::GLFWApp::RenderGUI() {
         ImGui::PopStyleVar();
     };
 
+    auto drawSpaceInfoPage = [&]() {
+        static std::string buf;
+        constexpr static ImVec4 POS_COL{.0f, 1.f, .0f, 1.f};
+
+        ImGui::Text("Pre Translate: ");
+        // (<preTr.x>, <preTr.y>, <preTr.z>)
+        ImGui::PushStyleColor(ImGuiCol_Text, POS_COL);
+        buf.clear();
+        buf.append("(");
+        for (uint8_t xyz = 0; xyz < 3; ++xyz) {
+            if (xyz != 0)
+                buf.append(", ");
+            auto s = std::to_string(sharedStates->preTranslate[xyz]);
+            auto p = s.find('.');
+            buf.append(s.substr(0, p + 3));
+        }
+        buf.append(")");
+        ImGui::Text(buf.c_str());
+        ImGui::PopStyleColor();
+
+        ImGui::Text("Camera in Block: ");
+        // (<camInBlk.x>, <camInBlk.y>, <camInBlk.z>)
+        ImGui::PushStyleColor(ImGuiCol_Text, POS_COL);
+        buf.clear();
+        buf.append("(");
+        for (uint8_t xyz = 0; xyz < 3; ++xyz) {
+            if (xyz != 0)
+                buf.append(", ");
+            buf.append(std::to_string(sharedStates->camInBlk[xyz]));
+        }
+        buf.append(")");
+        ImGui::Text(buf.c_str());
+        
+        // (<blkDim.x>, <blkDim.y>, <blkDim.z>)
+        ImGui::PopStyleColor();
+        buf.clear();
+        buf.append("/(");
+        for (uint8_t xyz = 0; xyz < 3; ++xyz) {
+            if (xyz != 0)
+                buf.append(", ");
+            buf.append(std::to_string(sharedStates->blkDim[xyz]));
+        }
+        buf.append(")");
+        ImGui::Text(buf.c_str());
+    };
+
     switch (sharedStates->guiPage) {
     case GUIPage::IntrctModePage:
         drawIntrctModePage();
+        break;
+    case GUIPage::SpaceInfoPage:
+        drawSpaceInfoPage();
         break;
     }
 

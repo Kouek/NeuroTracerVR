@@ -182,9 +182,10 @@ static void initRender() {
             noPaddingBlockLength = blockLenInfo[0] - 2 * blockLenInfo[1];
 
             auto blockDimInfo = volume->GetBlockDim();
-            glm::vec3 LOD0BlockDim = {blockDimInfo[0][0], blockDimInfo[0][1],
-                                      blockDimInfo[0][2]};
-            auto volSz = (float)noPaddingBlockLength * spaces * LOD0BlockDim;
+            sharedStates->blkDim = {blockDimInfo[0][0], blockDimInfo[0][1],
+                                    blockDimInfo[0][2]};
+            auto volSz = (float)noPaddingBlockLength * spaces *
+                         glm::vec3{sharedStates->blkDim};
             hfVolSz = .5f * volSz;
 
             std::tie(volCubeVAO, volCubeVBO, volCubeEBO) = createCube(hfVolSz);
@@ -224,9 +225,13 @@ static void initSignalAndSlots() {
         std::tie(sharedStates->projection2, sharedStates->preScale,
                  sharedStates->eyeToHeadTranslate2),
         [&]() {
+            auto minDist = sharedStates->preScale * noPaddingBlockLength;
             projParam.nearClip =
                 sharedStates->preScale * SharedStates::NEAR_CLIP;
             projParam.farClip = sharedStates->preScale * SharedStates::FAR_CLIP;
+            if (projParam.farClip - projParam.nearClip < minDist)
+                projParam.farClip = projParam.nearClip + minDist;
+
             projParam.unProjection2[0] =
                 Math::InverseProjective(sharedStates->projection2[0]);
             projParam.unProjection2[1] =
@@ -313,6 +318,11 @@ static void initSignalAndSlots() {
             camParam.eyePos2[1] =
                 (sharedStates->preScale * PR) + sharedStates->preTranslate;
             camParam.rotation = {R, U, -F};
+
+            auto invNBL = 1.f / noPaddingBlockLength;
+            for (uint8_t xyz = 0; xyz < 3; ++xyz)
+                sharedStates->camInBlk[xyz] =
+                    (glm::uint)(camParam.headPos[xyz] * invNBL / spaces[xyz]);
         },
         std::tie(camParam));
     statefulSys->Register(std::tie(camParam),
@@ -320,7 +330,7 @@ static void initSignalAndSlots() {
     statefulSys->Register(
         std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].clicked),
         [&]() {
-            if (sharedStates->guiPage != GUIPage::None)
+            if (sharedStates->IsGUIBlockInteraction())
                 return;
 
             switch (sharedStates->interactiveMode) {
@@ -358,7 +368,7 @@ static void initSignalAndSlots() {
     statefulSys->Register(
         std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].pressed),
         [&]() {
-            if (sharedStates->guiPage != GUIPage::None)
+            if (sharedStates->IsGUIBlockInteraction())
                 return;
 
             switch (sharedStates->interactiveMode) {
@@ -519,13 +529,6 @@ static void render() {
         GL_CHECK;
     };
 
-    auto getGUIRenderEyeIdx = [&]() -> uint8_t {
-        switch (sharedStates->guiPage) {
-        case GUIPage::IntrctModePage:
-            return 1;
-        }
-    };
-
     glEnable(GL_MULTISAMPLE);
     glEnable(GL_DEPTH_TEST);
     glCullFace(GL_BACK);
@@ -586,7 +589,8 @@ static void render() {
     glDisable(GL_MULTISAMPLE);
     glDisable(GL_BLEND);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, renderFBO2[getGUIRenderEyeIdx()]);
+    glBindFramebuffer(GL_FRAMEBUFFER,
+                      renderFBO2[sharedStates->GetGUIRenderEyeIdx()]);
     glfwApp->RenderGUI();
 
     for (uint8_t eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {

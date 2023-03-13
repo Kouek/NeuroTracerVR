@@ -268,11 +268,27 @@ void kouek::VRApp::initSignalAndSlots() {
                    digitActionChangeds2[PathInteractHndIdx]
                                        [actIdxToIdx(DigitActIdx::Menu)];
         });
+    statefulSys->Register(
+        [&]() {
+            if (sharedStates->guiPage == GUIPage::SpaceInfoPage)
+                sharedStates->guiPage = GUIPage::None;
+            else
+                sharedStates->guiPage = GUIPage::SpaceInfoPage;
+        },
+        std::tie(sharedStates->guiPage),
+        [&]() {
+            return digitActionActives2[VolInteractHndIdx]
+                                      [actIdxToIdx(DigitActIdx::Menu)] &&
+                   digitActionStates2[VolInteractHndIdx]
+                                     [actIdxToIdx(DigitActIdx::Menu)] &&
+                   digitActionChangeds2[VolInteractHndIdx]
+                                       [actIdxToIdx(DigitActIdx::Menu)];
+        });
 }
 
 void kouek::VRApp::processInputToRender() {
-    if (sharedStates->guiPage != GUIPage::None)
-        return; // when drawing GUI, don't process inputs to affect rendering
+    if (sharedStates->IsGUIBlockInteraction())
+        return;
 
     auto processPreTranslate = [&]() {
         static constexpr auto DELTA_MULT = 10.f;
