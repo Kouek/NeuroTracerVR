@@ -9,6 +9,7 @@
     "224": [ 0.75, 0.5, 0.25, 0.6 ],
     "255": [ 1.0, 0.1, 0.0, 0.9 ]
   },
+  "start_pos": [ 4.39, 7.21, 6.51 ],
   "volume_path": "D:/MouseNeuronData/mouse_file_config.json",
   "swc_path": "D:/MouseNeuronData/SWC.txt"
 }

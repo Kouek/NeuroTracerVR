@@ -18,9 +18,9 @@ out vec4 posInWdSp;
 out vec4 normal;
 
 void main() {
-	vec3 axis;
+	vec3 axis = normalize(gs_in[1].pos - gs_in[0].pos);
     vec3 pos;
-    vec3 delta = vec3(0, width, 0);
+    vec3 delta = abs(axis.y) > .577 ? vec3(0, 0, width) : vec3(0, width, 0);
     mat3 rot;
     normal.w = 0;
 
@@ -28,7 +28,6 @@ void main() {
         float s = sins[idx];
         float c = coss[idx];
         float oc = 1.0 - c;
-        axis = normalize(gs_in[1].pos - gs_in[0].pos);
         rot = mat3(oc * axis.x * axis.x + c, oc * axis.x * axis.y - axis.z * s,
                    oc * axis.z * axis.x + axis.y * s,
                    oc * axis.x * axis.y + axis.z * s, oc * axis.y * axis.y + c,

@@ -22,14 +22,15 @@ class GLPathRenderer {
     static constexpr GLuint MAX_PATH_NUM = 100;
     static constexpr GLuint NONE = std::numeric_limits<GLuint>::max();
     static constexpr GLuint DIV_NUM = 8;
+    static constexpr GLuint BLOCK_NUM = 100;
 
     inline static GLfloat szScale = 1.f;
-    inline static GLfloat rootVertSize = .01f;
+    inline static GLfloat rootVertSize = .015f;
     inline static GLfloat endVertSize = .004f;
-    inline static GLfloat selectedVertSize = .006f;
-    inline static GLfloat secondSelectedVertSize = .005f;
-    inline static GLfloat lineWidth = .0025f;
-    inline static GLfloat selectedLineWidth = .003f;
+    inline static GLfloat selectedVertSize = .01f;
+    inline static GLfloat secondSelectedVertSize = .007f;
+    inline static GLfloat lineWidth = .003f;
+    inline static GLfloat selectedLineWidth = .006f;
     inline static glm::vec3 selectedVertColor{1.f, .5f, 1.f};
 
   private:
@@ -83,7 +84,6 @@ class GLPathRenderer {
         }
 
       private:
-        inline const auto &getVertexIDs() const { return verts; }
         inline void addVertex(GLuint vertID) {
             verts.emplace_back(vertID);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
@@ -177,20 +177,82 @@ class GLPathRenderer {
         GLint szPos;
     } vertDepShader;
 
+    struct GLuint3Hash {
+        size_t operator()(const std::array<GLuint, 3> &idx3) const {
+            std::array hash3 = {std::hash<GLuint>()(idx3[0]),
+                                std::hash<GLuint>()(idx3[1]),
+                                std::hash<GLuint>()(idx3[2])};
+            constexpr auto BitNum = sizeof(size_t) * 8;
+            return (hash3[0] << ((BitNum >> 1) - 1)) ^
+                   (hash3[1] << ((BitNum >> 2) - 1)) ^ hash3[2];
+        }
+    };
+    struct GLuint3Eq {
+        bool operator()(const std::array<GLuint, 3> &a,
+                        const std::array<GLuint, 3> &b) const {
+            for (uint8_t i = 0; i < 3; ++i)
+                if (a[i] != b[i])
+                    return false;
+            return true;
+        }
+    };
+
     GLuint extraVertID = NONE;
     GLuint selectedPathID = NONE;
     GLuint selectedVertID = NONE;
     GLuint scndSelectedVertID = NONE; // for 2 verts op
     GLuint selectedSubPathID = NONE;
+
+    glm::vec3 bboxMax;
+
     std::vector<glm::vec3> verts;
     std::vector<GLuint> pathIDOfVerts;
     std::unordered_map<GLuint, Path> paths;
+    std::unordered_map<std::array<GLuint, 3>, std::vector<GLuint>, GLuint3Hash,
+                       GLuint3Eq>
+        blkVertIDs;
+
     std::queue<GLuint> availableVertIDs;
     std::queue<GLuint> availableSubPathIDs;
     std::queue<GLuint> availablePathIDs;
 
+  private:
+    std::array<GLuint, 3> computeBlock(glm::vec3 pos) {
+        std::array<GLuint, 3> ret;
+
+        pos = glm::max(glm::zero<glm::vec3>(),
+                       glm::min(glm::one<glm::vec3>(), pos / bboxMax));
+        ret[0] = glm::floor(pos.x * BLOCK_NUM);
+        ret[1] = glm::floor(pos.x * BLOCK_NUM);
+        ret[2] = glm::floor(pos.x * BLOCK_NUM);
+
+        return ret;
+    }
+    std::array<GLuint, 3> computeBlock(GLuint vertID) {
+        auto &pos = verts[vertID];
+        return computeBlock(pos);
+    }
+    void addVertToBlock(GLuint vertID) {
+        auto blk = computeBlock(vertID);
+        auto itr = blkVertIDs.find(blk);
+        if (itr == blkVertIDs.end()) {
+            auto [newItr, inserted] = blkVertIDs.emplace(
+                std::piecewise_construct, std::forward_as_tuple(blk),
+                std::forward_as_tuple());
+            itr = newItr;
+        }
+        itr->second.emplace_back(vertID);
+    }
+    void deleteVertInBlock(GLuint vertID) {
+        auto blk = computeBlock(vertID);
+        auto &vertIDs = blkVertIDs.at(blk);
+        auto itr = std::find(vertIDs.begin(), vertIDs.end(), vertID);
+        vertIDs.erase(itr);
+    }
+
   public:
-    GLPathRenderer(const std::string &shaderDirPath) {
+    GLPathRenderer(const std::string &shaderDirPath, const glm::vec3 &bboxMax)
+        : bboxMax(bboxMax) {
         glGenVertexArrays(1, &VAO);
         glBindVertexArray(VAO);
         glGenBuffers(1, &VBO);
@@ -317,16 +379,20 @@ class GLPathRenderer {
     inline GLuint GetPathIDOf(GLuint vertID) const {
         return pathIDOfVerts[vertID];
     }
+    inline GLuint GetRootIDOf(GLuint pathID) const {
+        return paths.at(pathID).rootID;
+    }
     inline const auto &GetPaths() const { return paths; }
     inline const auto &GetVertexPositions() const { return verts; }
     inline GLuint AddPath(const glm::vec3 &color, const glm::vec3 &rootPos) {
         GLuint pathID = availablePathIDs.front();
-        availablePathIDs.pop();
         GLuint rootID = availableVertIDs.front();
+        availablePathIDs.pop();
         availableVertIDs.pop();
 
         pathIDOfVerts[rootID] = pathID;
         verts[rootID] = rootPos;
+        addVertToBlock(rootID);
 
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
         glBufferSubData(GL_ARRAY_BUFFER, VERT_DAT_STRIDE * rootID,
@@ -353,9 +419,6 @@ class GLPathRenderer {
         paths.erase(pathID);
     }
     inline void JoinPath() {
-        if (selectedVertID == NONE || scndSelectedVertID == NONE)
-            return;
-
         GLuint outPathID = pathIDOfVerts[selectedVertID];
         GLuint inPathID = pathIDOfVerts[scndSelectedVertID];
         if (outPathID == inPathID || outPathID == NONE || inPathID == NONE)
@@ -382,15 +445,15 @@ class GLPathRenderer {
         outPath.subPaths.at(subPathID).addVertex(scndSelectedVertID);
         EndPath();
     }
-    inline void StartPath(GLuint pathID) { selectedPathID = pathID; }
+    inline void StartPath(GLuint pathID) {
+        selectedPathID = pathID;
+        selectedSubPathID = selectedVertID = scndSelectedVertID = NONE;
+    }
     inline void EndPath() {
         selectedPathID = selectedVertID = selectedSubPathID =
             scndSelectedVertID = NONE;
     }
     inline GLuint AddSubPath() {
-        if (selectedPathID == NONE)
-            return NONE;
-
         Path &path = paths.at(selectedPathID);
         GLuint subPathID = availableSubPathIDs.front();
         availableSubPathIDs.pop();
@@ -412,13 +475,11 @@ class GLPathRenderer {
         selectedSubPathID = selectedVertID = scndSelectedVertID = NONE;
     }
     inline GLuint AddVertex(const glm::vec3 &pos) {
-        if (selectedPathID == NONE || selectedSubPathID == NONE)
-            return NONE;
-
         GLuint vertID = availableVertIDs.front();
         availableVertIDs.pop();
 
         pathIDOfVerts[vertID] = selectedPathID;
+        addVertToBlock(vertID);
 
         verts[vertID] = pos;
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
@@ -440,14 +501,11 @@ class GLPathRenderer {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
     inline void DeleteVertex(GLuint vertID) {
-        if (selectedPathID == NONE)
-            return;
-
         GLuint linkCnt = 0;
         GLuint tarSPID;
         SubPath *tarSP = nullptr;
 
-        Path &path = paths.at(selectedPathID);
+        auto &path = paths.at(pathIDOfVerts[vertID]);
         if (vertID == path.rootID)
             return;
         for (auto &[id, subPath] : path.subPaths)
@@ -457,7 +515,7 @@ class GLPathRenderer {
                 tarSP = &subPath;
                 ++linkCnt;
             }
-        if (linkCnt == 0 || linkCnt > 1)
+        if (linkCnt > 1)
             return; // vert doesn't exist or is not vert at the end
         tarSP->verts.pop_back();
         availableVertIDs.push(vertID);
@@ -472,12 +530,68 @@ class GLPathRenderer {
             selectedPathID = NONE;
         }
     }
+    inline GLuint GetEndVertexSubPathID(GLuint vertID) {
+        auto &path = paths.at(pathIDOfVerts[vertID]);
+        
+        auto tarSPID = NONE;
+        GLuint linkCnt = 0;
+        if (vertID == path.rootID)
+            return NONE;
+        for (auto &[id, subPath] : path.subPaths)
+            for (size_t i = 0; i < subPath.verts.size();++i)
+                if (subPath.verts[i] == vertID) {
+                    if (i == 0 || i == subPath.verts.size() - 1) {
+                        tarSPID = id;
+                        ++linkCnt;
+                    } else
+                        linkCnt = 2;
+
+                    if (linkCnt > 1)
+                        return NONE;
+                }
+
+        return tarSPID;
+    }
     inline void StartVertex(GLuint vertID) { selectedVertID = vertID; }
     inline void StartSecondVertex(GLuint vertID) {
         scndSelectedVertID = vertID;
     }
     inline void EndVertex() { selectedVertID = NONE; }
     inline void EndSecondVertex() { scndSelectedVertID = NONE; }
+    inline GLuint SearchNearest(const glm::vec3 &pos) {
+        auto blk = computeBlock(pos);
+
+        auto blkMin = decltype(blk){blk[0] == 0 ? blk[0] : blk[0] - 1,
+                                      blk[1] == 0 ? blk[1] : blk[1] - 1,
+                                      blk[2] == 0 ? blk[2] : blk[2] - 1};
+        auto blkMax =
+            decltype(blk){blk[0] == BLOCK_NUM - 1 ? blk[0] : blk[0] + 1,
+                          blk[1] == BLOCK_NUM - 1 ? blk[1] : blk[1] + 1,
+                          blk[2] == BLOCK_NUM - 1 ? blk[2] : blk[2] + 1};
+
+        auto minDistID = NONE;
+        auto minDistSqr = std::numeric_limits<float>::max();
+        for (auto bz = blkMin[2]; bz <= blkMax[2];++bz)
+            for (auto by = blkMin[1]; by <= blkMax[1]; ++by)
+                for (auto bx = blkMin[0]; bx <= blkMax[0]; ++bx) {
+                    blk = {bx, by, bz};
+                    auto itr = blkVertIDs.find(blk);
+                    if (itr == blkVertIDs.end())
+                        continue;
+
+                    for (auto vertID : itr->second) {
+                        auto &vertPos = verts[vertID];
+                        auto d = pos - vertPos;
+                        auto ds = glm::dot(d, d);
+                        if (minDistSqr > ds) {
+                            minDistSqr = ds;
+                            minDistID = vertID;
+                        }
+                    }
+                }
+
+        return minDistID;
+    }
     inline void Draw(const glm::mat4 &M, const glm::mat4 &VP) {
         lineShader.shader->use();
         glUniformMatrix4fv(lineShader.MPos, 1, GL_FALSE, &M[0][0]);
@@ -563,11 +677,10 @@ class GLPathRenderer {
                         VERT_DAT_POS_SIZE, &pos);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
-    inline void DrawExtraVertex(float size, const glm::mat4 &VP,
-                                const glm::vec3 &color) {
+    inline void DrawExtraVertex(const glm::mat4 &M, const glm::mat4 &VP,
+                                const glm::vec3 &color, float size) {
         vertShader.shader->use();
-        static constexpr auto IDN = glm::identity<glm::mat4>();
-        glUniformMatrix4fv(vertShader.MPos, 1, GL_FALSE, &IDN[0][0]);
+        glUniformMatrix4fv(vertShader.MPos, 1, GL_FALSE, &M[0][0]);
         glUniformMatrix4fv(vertShader.VPPos, 1, GL_FALSE, &VP[0][0]);
 
         glUniform3fv(vertShader.colPos, 1, &color[0]);
@@ -576,10 +689,10 @@ class GLPathRenderer {
         glDrawArrays(GL_POINTS, extraVertID, 1);
         glBindVertexArray(0);
     }
-    inline void DrawExtraVertexDepth(float size, const glm::mat4 &VP) {
+    inline void DrawExtraVertexDepth(const glm::mat4 &M, const glm::mat4 &VP,
+                                     float size) {
         vertDepShader.shader->use();
-        static constexpr auto IDN = glm::identity<glm::mat4>();
-        glUniformMatrix4fv(vertDepShader.MPos, 1, GL_FALSE, &IDN[0][0]);
+        glUniformMatrix4fv(vertDepShader.MPos, 1, GL_FALSE, &M[0][0]);
         glUniformMatrix4fv(vertDepShader.VPPos, 1, GL_FALSE, &VP[0][0]);
 
         glUniform1f(vertDepShader.szPos, size);

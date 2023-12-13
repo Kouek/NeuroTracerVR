@@ -115,8 +115,7 @@ struct SharedStates {
     float preScale = .2f;
     float preTranslateChngStep;
     float antiMoireStepMult = 0.8f;
-    glm::vec3 preTranslate{22.2718792f * .2f, 36.81226598f * .2f,
-                           32.1920395f * .2f};
+    glm::vec3 preTranslate{0.f, 0.f, 0.f};
     std::array<glm::vec3, 2> eyeToHeadTranslate2;
     std::array<glm::mat4, 2> projection2{
         glm::perspectiveFov(glm::radians(90.f), (float)renderSz.x,

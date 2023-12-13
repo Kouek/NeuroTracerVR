@@ -14,6 +14,7 @@ class VolCfg {
   private:
     float baseSpace;
     glm::vec3 spaces;
+    glm::vec3 startPos;
     std::array<glm::vec4, 256> tfPnts;
     std::string volumePath;
     std::string SWCPath;
@@ -45,6 +46,13 @@ class VolCfg {
 
             volumePath = json.at("volume_path");
             SWCPath = json.at("swc_path");
+
+            jsonItem = json.at("start_pos");
+            {
+                startPos.x = jsonItem[0];
+                startPos.y = jsonItem[1];
+                startPos.z = jsonItem[2];
+            }
 
             jsonItem = json.at("tf");
             {
@@ -97,6 +105,7 @@ class VolCfg {
     retType Get##firstChInUpperCase##successor() const {                       \
         return firstChInLowerCase##successor;                                  \
     }
+    GETTER(glm::vec3, s, S, tartPos)
     GETTER(glm::vec3, s, S, paces)
     GETTER(float, b, B, aseSpace)
     GETTER(const std::string &, v, V, olumePath)

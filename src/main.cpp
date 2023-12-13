@@ -31,7 +31,9 @@ static glm::vec3 spaces;
 static float baseRayStep;
 static glm::mat4 W2VR;
 static glm::mat4 VR2W;
+static glm::uvec3 volDim;
 static uint32_t blockLength, noPaddingBlockLength;
+static GLuint nearestVeriID = GLPathRenderer::NONE;
 static VRRenderer::CameraParam camParam;
 static VRRenderer::ProjectionParam projParam;
 
@@ -174,9 +176,13 @@ static void initRender() {
         VolCfg cfg(std::string(PROJECT_SOURCE_DIR) + "/cfg/vol_cfg.json");
         spaces = cfg.GetSpaces();
         baseRayStep = cfg.GetBaseSpace();
+        sharedStates->preTranslate = cfg.GetStartPos();
         std::shared_ptr<vs::CompVolume> volume =
             vs::CompVolume::Load(cfg.GetVolumePath().c_str());
         {
+            volDim = {volume->GetVolumeDimX(), volume->GetVolumeDimY(),
+                      volume->GetVolumeDimZ()};
+
             auto blockLenInfo = volume->GetBlockLength();
             blockLength = blockLenInfo[0];
             noPaddingBlockLength = blockLenInfo[0] - 2 * blockLenInfo[1];
@@ -206,7 +212,7 @@ static void initRender() {
                      SharedStates::MAX_SEARCH_MIN_SCALAR);
 
     pathRenderer = std::make_unique<GLPathRenderer>(
-        std::string(PROJECT_SOURCE_DIR) + "/include/path");
+        std::string(PROJECT_SOURCE_DIR) + "/include/path", volDim);
 }
 
 static void initSignalAndSlots() {
@@ -327,6 +333,7 @@ static void initSignalAndSlots() {
         std::tie(camParam));
     statefulSys->Register(std::tie(camParam),
                           [&]() { renderer->SetCameraParam(camParam); });
+
     statefulSys->Register(
         std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].clicked),
         [&]() {
@@ -335,18 +342,31 @@ static void initSignalAndSlots() {
 
             switch (sharedStates->interactiveMode) {
             case InteractionMode::SelectVert:
+                if (nearestVeriID != GLPathRenderer::NONE) {
+                    auto id = pathRenderer->GetPathIDOf(nearestVeriID);
+                    pathRenderer->StartPath(id);
+
+                    id = pathRenderer->GetEndVertexSubPathID(nearestVeriID);
+                    pathRenderer->StartSubPath(id);
+
+                    pathRenderer->StartVertex(nearestVeriID);
+
+                    sharedStates->interactiveMode = InteractionMode::AddVert;
+                    sharedStates->guiIntrctModePageStates.ChangeSelected(
+                        sharedStates->interactiveMode);
+                    nearestVeriID = GLPathRenderer::NONE;
+                }
                 break;
             case InteractionMode::AddPath:
                 if (isInteractingPosFound()) {
                     auto &col = colTbl.NextColor();
-                    auto pos = W2VR * glm::vec4{refInteractingPos(), 1.f};
-                    auto id = pathRenderer->AddPath(col, pos);
-
+                    auto id = pathRenderer->AddPath(col, refInteractingPos());
                     pathRenderer->StartPath(id);
 
                     sharedStates->interactiveMode = InteractionMode::AddVert;
                     sharedStates->guiIntrctModePageStates.ChangeSelected(
                         sharedStates->interactiveMode);
+                    nearestVeriID = GLPathRenderer::NONE;
                 }
                 break;
             case InteractionMode::AddVert:
@@ -357,45 +377,20 @@ static void initSignalAndSlots() {
                         pathRenderer->StartSubPath(id);
                     }
 
-                    auto pos = W2VR * glm::vec4{refInteractingPos(), 1.f};
-                    auto id = pathRenderer->AddVertex(pos);
-
+                    auto id = pathRenderer->AddVertex(refInteractingPos());
                     pathRenderer->StartVertex(id);
+
+                    nearestVeriID = GLPathRenderer::NONE;
                 }
                 break;
-            }
-        });
-    statefulSys->Register(
-        std::tie(sharedStates->handStates2[VRApp::PathInteractHndIdx].pressed),
-        [&]() {
-            if (sharedStates->IsGUIBlockInteraction())
-                return;
+            case InteractionMode::DeleteVert: {
+                auto id = pathRenderer->GetSelectedVertID();
+                if (id == GLPathRenderer::NONE)
+                    break;
 
-            switch (sharedStates->interactiveMode) {
-            case InteractionMode::SelectVert:
-                break;
-            case InteractionMode::AddVert:
-                if (isInteractingPosFound()) {
-                    if (pathRenderer->GetSelectedSubPathID() ==
-                        GLPathRenderer::NONE)
-                        return;
-                    auto lastID = pathRenderer->GetSelectedVertID();
-                    if (lastID == GLPathRenderer::NONE)
-                        return;
-
-                    auto pos =
-                        glm::vec3{W2VR * glm::vec4{refInteractingPos(), 1.f}};
-                    auto lastPos = pathRenderer->GetVertexPositions()[lastID];
-                    if (glm::distance(pos, lastPos) <
-                        sharedStates->preScale *
-                            SharedStates::CONSECUTIVE_PATH_VERTS_MIN_DIST)
-                        return;
-
-                    auto id = pathRenderer->AddVertex(pos);
-
-                    pathRenderer->StartVertex(id);
-                }
-                break;
+                pathRenderer->EndVertex();
+                pathRenderer->DeleteVertex(id);
+            } break;
             }
         });
     statefulSys->Register(
@@ -454,17 +449,21 @@ static void render() {
     auto shouldShowInteractingPos = [&]() {
         return shouldCalcInteractingPos() && isInteractingPosFound();
     };
+    auto shouldSearchInteractingPoint = [&]() {
+        return sharedStates->interactiveMode == InteractionMode::SelectVert &&
+               sharedStates->handStates2[VRApp::PathInteractHndIdx].show;
+    };
+    auto shouldShowInteractingPoint = [&]() {
+        return shouldSearchInteractingPoint() &&
+               nearestVeriID != GLPathRenderer::NONE;
+    };
 
     static bool calculatingInteractingPos = false;
     if (shouldCalcInteractingPos()) {
         if (calculatingInteractingPos) {
             interactingPos = fetchMaxVoxPos();
-            if (isCalcInteractingPosReady()) {
-                glm::vec4 tmp{refInteractingPos(), 1.f};
-                tmp = VR2W * tmp;
-                refInteractingPos() = tmp;
+            if (isCalcInteractingPosReady())
                 calculatingInteractingPos = false;
-            }
         } else {
             glm::vec4 cubeMin{interactingCubeCntrPos, 1.f};
             glm::vec4 cubeMax{cubeMin};
@@ -483,6 +482,13 @@ static void render() {
 
     if (shouldShowInteractingPos())
         pathRenderer->PrepareExtraVertex(refInteractingPos());
+    else if (shouldSearchInteractingPoint()) {
+        auto queryPos = W2VR * glm::vec4{interactingCubeCntrPos, 1.f};
+        nearestVeriID = pathRenderer->SearchNearest(queryPos);
+        if (nearestVeriID != GLPathRenderer::NONE)
+            pathRenderer->PrepareExtraVertex(
+                pathRenderer->GetVertexPositions()[nearestVeriID]);
+    }
 
     auto renderHands = [&](uint8_t eyeIdx, bool renderDep) {
         if (renderDep)
@@ -514,7 +520,6 @@ static void render() {
     };
 
     auto renderVolCube = [&](uint8_t eyeIdx, bool renderDep) {
-        GL_CHECK;
         if (renderDep)
             colorDepShader->use();
         else {
@@ -526,7 +531,6 @@ static void render() {
         glBindVertexArray(volCubeVAO);
         glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, (const void *)0);
         glBindVertexArray(0);
-        GL_CHECK;
     };
 
     glEnable(GL_MULTISAMPLE);
@@ -541,16 +545,16 @@ static void render() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glEnable(GL_CULL_FACE);
-        if (shouldShowInteractingPos())
+        if (shouldShowInteractingPos() || shouldShowInteractingPoint())
             pathRenderer->DrawExtraVertexDepth(
-                SharedStates::INTERACT_VERT_HF_WID, VP2[eyeIdx]);
+                VR2W, VP2[eyeIdx], SharedStates::INTERACT_VERT_HF_WID);
         pathRenderer->DrawDepth(VR2W, VP2[eyeIdx]);
         renderHands(eyeIdx, true);
 
         glDisable(GL_CULL_FACE);
         renderVolCube(eyeIdx, true);
     }
-
+    GL_CHECK;
     renderer->Render(sharedStates->renderTarget);
 
     glClearColor(0, 0, 0, 1.f); // background color
@@ -561,10 +565,10 @@ static void render() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glEnable(GL_CULL_FACE);
-        if (shouldShowInteractingPos())
-            pathRenderer->DrawExtraVertex(SharedStates::INTERACT_VERT_HF_WID,
-                                          VP2[eyeIdx],
-                                          SharedStates::INTERACT_VERT_COL);
+        if (shouldShowInteractingPos() || shouldShowInteractingPoint())
+            pathRenderer->DrawExtraVertex(VR2W, VP2[eyeIdx],
+                                          SharedStates::INTERACT_VERT_COL,
+                                          SharedStates::INTERACT_VERT_HF_WID);
         pathRenderer->Draw(VR2W, VP2[eyeIdx]);
         renderHands(eyeIdx, false);
 

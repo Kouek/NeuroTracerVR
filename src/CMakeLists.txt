@@ -35,6 +35,7 @@ add_executable(
 set_target_properties(
 	${TARGET_NAME}
 	PROPERTIES
+	CUDA_ARCHITECTURES OFF
 	CUDA_SEPARABLE_COMPILATION ON
 	CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
@@ -50,6 +51,7 @@ target_link_libraries(
 	${TARGET_NAME}
 	PRIVATE
 	${OPENVR_LIBS}
+	${PCL_LIBRARIES}
 	"glm::glm"
 	"spdlog::spdlog"
 	"glfw"
@@ -59,6 +61,7 @@ target_include_directories(
 	${TARGET_NAME}
 	PRIVATE
 	${OPENVR_INC_DIR}
+	${PCL_INCLUDE_DIRS}
 	${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
 	"${INCLUDE_DIR}/vs_core" # VolumeSlicer header-only source file
 	"${CMAKE_CURRENT_LIST_DIR}/renderer/comp/vs_core" # VolumeSlicer inner header

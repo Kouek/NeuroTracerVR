@@ -53,6 +53,8 @@ class CompVolVRRenderer : public VRRenderer {
 
   public:
     CompVolVRRenderer(const RendererParam &cudaParam);
+    CompVolVRRenderer(const CompVolVRRenderer &) = delete;
+    CompVolVRRenderer &operator()(const CompVolVRRenderer &) = delete;
 
     /// <summary>
     /// Note: Should be called after SetVolume()
